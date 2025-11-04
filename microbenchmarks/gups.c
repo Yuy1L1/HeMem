@@ -221,6 +221,7 @@ static void *do_gups(void *arguments)
   uint64_t lfsr;
   uint64_t iters = args->iters;
   uint64_t start, end;
+  uint64_t tmp;
 
   cpu_set_t cpuset;
   pthread_t thread;
@@ -242,6 +243,7 @@ static void *do_gups(void *arguments)
   index2 = 0;
   done_gups = false;
   completed_gups[args->tid] = 0;
+  tmp = 0;
  // fprintf(hotsetfile, "Thread %d region: %p - %p\thot set: %p - %p\n", args->tid, field, field + (args->size * elt_size), field + args->hot_start, field + args->hot_start + (args->hotsize * elt_size));   
 
   for (i = 0; i < iters || iters == 0; i++) {
@@ -250,14 +252,14 @@ static void *do_gups(void *arguments)
     if (lfsr % 100 < 90) {
       lfsr = lfsr_fast(lfsr);
       index1 = args->hot_start + (lfsr % hotsize);
-      uint64_t tmp = field[index1];
+      tmp = field[index1];
       tmp = tmp + i;
       field[index1] = tmp;
     }
     else {
       lfsr = lfsr_fast(lfsr);
       index2 = lfsr % (args->size);
-      uint64_t tmp = field[index2];
+      tmp = field[index2];
       tmp = tmp + i;
       field[index2] = tmp;
     }
@@ -367,7 +369,7 @@ int main(int argc, char **argv)
     perror("mmap");
     assert(0);
   }
-
+  
   gettimeofday(&stoptime, NULL);
   fprintf(stderr, "Init took %.4f seconds\n", elapsed(&starttime, &stoptime));
   fprintf(stderr, "Region address: %p - %p\t size: %ld\n", p, (p + size), size);
@@ -503,8 +505,33 @@ int main(int argc, char **argv)
     }
   }
   //memset(thread_gups, 0, sizeof(thread_gups));
-
-#if 0
+  
+#if 0  
+  FILE *maps;
+  maps = fopen("/proc/self/maps", "r");
+  if (maps == NULL) {
+    perror("/proc/self/maps fopen");
+    assert(0);
+  }
+  char *line = NULL;
+  size_t len;
+  ssize_t nread = getline(&line, &len, maps);
+  char mapsfilename[32];
+  snprintf(mapsfilename, 32, "/tmp/maps-%d.txt", getpid());
+  FILE* mapsfile;
+  mapsfile = fopen(mapsfilename, "w");
+  if (mapsfile == NULL) {
+    perror("mapsfile open");
+    assert(0);
+  }
+  while (nread != -1) {
+    fprintf(mapsfile, line);
+    nread = getline(&line, &len, maps);
+  }
+  fclose(maps);
+  fclose(mapsfile); 
+#endif
+#if 0 
   FILE* pebsfile = fopen("pebs.txt", "w+");
   assert(pebsfile != NULL);
   for (uint64_t addr = (uint64_t)p; addr < (uint64_t)p + size; addr += (2*1024*1024)) {

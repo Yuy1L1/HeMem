@@ -3,7 +3,7 @@ import re
 import sys
 import numpy as np
 
-MAX_LATENCY = 2560
+MAX_LATENCY = 5120
 
 hist_pattern = re.compile(r"Hist\[[0-9]+\]=[0-9]+")
 

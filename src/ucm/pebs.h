@@ -28,6 +28,10 @@
 
 #define EWMA_FRAC (0.5)
 
+// maximum ratio of process FMMR target to actual
+// goal: to avoid wild swings
+#define MAX_RATIO 10.0
+
 #ifdef TMTS
 
 #define HEMEM_ACCESSED_FLAG ((uint64_t)0x0000000000000020UL)

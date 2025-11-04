@@ -1,8 +1,9 @@
+import sys
 from statistics import mean
 from statistics import stdev
 
 def main():
-    file = open("times.txt")
+    file = open(sys.argv[1])
     lines = file.readlines()
     file.close()
 
@@ -26,51 +27,63 @@ def main():
     migrates_up = []
     migrates_down = []
     pebs = []
+    remap_up = []
+    remap_down = []
 
     for line in lines:
         words = line.split()
-        time = float(words[1].replace(",", ""))
-        label = words[0]
-        if label == "mmap_dram:":
-            mmap_dram.append(time)
-        elif label == "mmap_nvm:":
-            mmap_nvm.append(time)
-        elif label == "hemem_mmap:":
-            hemem_mmap.append(time)
-        elif label == "hemem_missing_fault:":
-            hemem_missing_fault.append(time)
-        elif label == "page_fault:":
-            page_fault.append(time)
-        elif label == "hemem_migrate_up:":
-            hemem_migrate_up.append(time)
-        elif label == "hemem_migrate_down:":
-            hemem_migrate_down.append(time)
-        elif label == "uffdio_register:":
-            uffdio_register.append(time)
-        elif label == "uffdio_writeprotect:":
-            uffdio_writeprotect.append(time)
-        elif label == "memcpy_to_dram:":
-            memcpy_to_dram.append(time)
-        elif label == "memcpy_to_nvm:":
-            memcpy_to_nvm.append(time)
-        elif label == "hemem_enqueue_page:":
-            hemem_enqueue_page.append(time)
-        elif label == "mem_policy_allocate_page:":
-            mem_policy_allocate_page.append(time)
-        elif label == "scan:":
-            scans.append(time)
-        elif label == "clear_bits:":
-            clear_bits.append(time)
-        elif label == "migrate:":
-            migrates.append(time)
-        elif label == "migrate_up:":
-            migrates_up.append(time)
-        elif label == "migrate_down:":
-            migrates_down.append(time)
-        elif label == "pebs:":
-            pebs.append(time)
-        else:
-            print(label)
+        valid = True
+        try:
+            time = float(words[1].replace(",", ""))
+            label = words[0]
+        except IndexError:
+            print("Ignoring last line cutoff")
+            valid = False
+        if valid:        
+            if label == "mmap_dram:":
+                mmap_dram.append(time)
+            elif label == "mmap_nvm:":
+                mmap_nvm.append(time)
+            elif label == "hemem_mmap:":
+                hemem_mmap.append(time)
+            elif label == "hemem_missing_fault:":
+                hemem_missing_fault.append(time)
+            elif label == "page_fault:":
+                page_fault.append(time)
+            elif label == "hemem_migrate_up:":
+                hemem_migrate_up.append(time)
+            elif label == "hemem_migrate_down:":
+                hemem_migrate_down.append(time)
+            elif label == "uffdio_register:":
+                uffdio_register.append(time)
+            elif label == "uffdio_writeprotect:":
+                uffdio_writeprotect.append(time)
+            elif label == "memcpy_to_dram:":
+                memcpy_to_dram.append(time)
+            elif label == "memcpy_to_nvm:":
+                memcpy_to_nvm.append(time)
+            elif label == "hemem_enqueue_page:":
+                hemem_enqueue_page.append(time)
+            elif label == "mem_policy_allocate_page:":
+                mem_policy_allocate_page.append(time)
+            elif label == "scan:":
+                scans.append(time)
+            elif label == "clear_bits:":
+                clear_bits.append(time)
+            elif label == "migrate:":
+                migrates.append(time)
+            elif label == "migrate_up:":
+                migrates_up.append(time)
+            elif label == "migrate_down:":
+                migrates_down.append(time)
+            elif label == "pebs:":
+                pebs.append(time)
+            elif label == "hemem_remap_page_up:":
+                remap_up.append(time)
+            elif label == "hemem_remap_page_down:":
+                remap_down.append(time)
+            #else:
+            #    print(label)
 
     print("dram mmaps:                 ", len(mmap_dram))
     print("nvm mmaps:                  ", len(mmap_nvm))
@@ -83,6 +96,8 @@ def main():
     print("uffdio writeprotects:       ", len(uffdio_writeprotect))
     print("memcpys to dram:            ", len(memcpy_to_dram))
     print("memcpys to nvm:             ", len(memcpy_to_nvm))
+    print("remap pages to dram:        ", len(remap_up))
+    print("remap pages to nvm:         ", len(remap_down))
     print("scans:                      ", len(scans))
     print("clear bits:                 ", len(clear_bits))
     print("migrates:                   ", len(migrates))
@@ -112,6 +127,10 @@ def main():
         print("memcpys to dram avg:         %1.6f (%1.6f)" % (mean(memcpy_to_dram), stdev(memcpy_to_dram)))
     if len(memcpy_to_nvm) != 0:
         print("memcpys to nvm avg:          %1.6f (%1.6f)" % (mean(memcpy_to_nvm), stdev(memcpy_to_nvm)))
+    if (len(remap_up) != 0):
+        print("remap pages to dram avg:     %1.6f (%1.6f)" % (mean(remap_up), stdev(remap_up)))
+    if (len(remap_down) != 0):
+        print("remap pages to dram avg:     %1.6f (%1.6f)" % (mean(remap_down), stdev(remap_down)))
     if len(scans) != 0 and len(scans) > 1:
         print("scans avg:                   %1.6f (%1.6f)" % (mean(scans), stdev(scans)))
     if len(scans) == 1:

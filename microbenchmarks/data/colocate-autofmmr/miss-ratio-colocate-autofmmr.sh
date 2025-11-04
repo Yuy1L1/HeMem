@@ -3,11 +3,11 @@ set terminal pdf size 8,2 fontscale 0.7
 set output "miss-ratio-colocate-autofmmr.pdf"
 #set xdata time
 #set autoscale y
-file1="data/colocate/logs/first-log.txt"
-file2="data/colocate/logs/second-log.txt"
-file3="data/colocate/logs/third-log.txt"
-file4="data/colocate/logs/fourth-log.txt"
-file5="data/colocate/logs/fifth-log.txt"
+file1="data/colocate-autofmmr/logs/first-log.txt"
+file2="data/colocate-autofmmr/logs/second-log.txt"
+file3="data/colocate-autofmmr/logs/third-log.txt"
+file4="data/colocate-autofmmr/logs/fourth-log.txt"
+file5="data/colocate-autofmmr/logs/fifth-log.txt"
 set datafile separator "\t"
 set ytics 0.25
 set key outside top left horizontal font ",7"
@@ -18,7 +18,7 @@ set xlabel "Time (s)"
 set ylabel "Miss Ratio"
 
 cpu_freq=2100000000
-start=`awk '{ if(min == 0) { min = $1 } else { min = $1 < min ? $1 : min } } END { print min }' data/colocate/logs/*.txt`
+start=`awk '{ if(min == 0) { min = $1 } else { min = $1 < min ? $1 : min } } END { print min }' data/colocate-autofmmr/logs/*.txt`
 
 plot \
   file1 using ($1-start)/cpu_freq:2 title "GUPS 1 (1.0)" with lines lw 4, \

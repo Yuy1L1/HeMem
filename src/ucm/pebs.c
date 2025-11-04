@@ -188,6 +188,19 @@ void *pebs_scan_thread()
                 page = find_page(process, pfn);
                 if (page != NULL) {
                   if (page->va != 0) {
+   		              assert(j == DRAMREAD || j == NVMREAD);
+		                if(j == DRAMREAD) {
+		                  if(!page->in_dram) {
+			                  process->wrong_memtype++;
+		                  }
+		                  /* assert(page->in_dram); */
+		                } else {
+		                  if(page->in_dram) {
+			                  process->wrong_memtype++;
+		                  }
+		                  /* assert(!page->in_dram); */
+		                }
+   
                     process->accessed_pages[j]++;
                     page->accesses[j]++;
                     page->tot_accesses[j]++;
@@ -1320,6 +1333,7 @@ void *pebs_policy_thread()
         process->accessed_pages[DRAMREAD] = 0; process->accessed_pages[NVMREAD] = 0;
       } else {
         process->current_miss_ratio = process->target_miss_ratio;
+        //process->current_miss_ratio = 0;
       }
      
       for (int xxx = LAST_HEMEM_THREAD + 1; xxx < PEBS_NPROCS; xxx++) {
@@ -1394,11 +1408,10 @@ void *pebs_policy_thread()
             }
           }
 */
-          if (ideal_bin_accesses) {
-            process->ratio = (1.0 * total_dram_accesses) / ideal_bin_accesses;
-            total_ratio += process->ratio;
-            ++total_procs;
-          }
+          process->ratio = (ideal_bin_accesses != 0) ? ((1.0 * total_dram_accesses) / ideal_bin_accesses) : (MAX_RATIO);
+          if (process->ratio > MAX_RATIO) process->ratio = MAX_RATIO;
+          total_ratio += process->ratio;
+          ++total_procs;
           LOG("Process %d: target hit ratio: %.4f, ideal bin accesses: %ld, total bin accesses %ld, total dram accesses %ld\n, ratio: %.4f", 
             process->pid, (1 - process->target_miss_ratio), ideal_bin_accesses, total_bin_accesses, total_dram_accesses, process->ratio);
         }
@@ -1505,15 +1518,15 @@ void *pebs_policy_thread()
       }
 
       // Fix an amount of pages to transfer
-      int64_t transfer_pages = max(take_pages, get_pages);
+      int64_t transfer_pages = min(take_pages, get_pages);
       if(transfer_pages > interprocess_migrate / 2 / (int64_t)PAGE_SIZE) {
         transfer_pages = interprocess_migrate / 2 / (int64_t)PAGE_SIZE;
       }
       // if some pages can be satisfied from free dram pages, reduce the pages taken from processes
-      transfer_pages -= dram_free_list.numentries;
-      if(transfer_pages < 0) {
-        transfer_pages = 0;
-      }
+      //transfer_pages -= dram_free_list.numentries;
+      //if(transfer_pages < 0) {
+      //  transfer_pages = 0;
+      //}
       LOG("Transfer pages %ld\n", transfer_pages);
 
       // Negotiate getting these pages for the processes
@@ -1532,7 +1545,7 @@ void *pebs_policy_thread()
         }
         // Process receiving pages
         else if(process->dram_delta > 0 && get_pages >= 1) {
-          process->dram_delta = (transfer_pages + dram_free_list.numentries) * ((double)process->dram_delta / (double)get_pages) * (int64_t)PAGE_SIZE;
+          process->dram_delta = transfer_pages * ((double)process->dram_delta / (double)get_pages) * (int64_t)PAGE_SIZE;
         } else {
           process->dram_delta = 0;
           // No process is receiving pages, but we have free DRAM pages

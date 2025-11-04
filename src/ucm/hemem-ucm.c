@@ -390,6 +390,9 @@ struct hemem_process* ucm_add_process(int fd, struct add_process_request* reques
   process->exited = false;
   
   process->target_miss_ratio = request->target_miss_ratio;
+  if (process->target_miss_ratio == 1) {
+    process->target_miss_ratio = 0.99999;
+  }
   
   process->valid_uffd = false;
   for (int i = 0; i < NUM_HOTNESS_LEVELS; i++) {

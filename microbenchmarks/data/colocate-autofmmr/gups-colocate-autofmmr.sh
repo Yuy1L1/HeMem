@@ -4,11 +4,11 @@ set output "gups-colocate-autofmmr.pdf"
 #set xdata time
 #set autoscale y
 #file="/home/amanda/hemem-paper/figures/gups/hotset-move/mm-new.txt"
-file1="data/colocate/gups/first-gups.txt"
-file2="data/colocate/gups/second-gups.txt"
-file3="data/colocate/gups/third-gups.txt"
-file4="data/colocate/gups/fourth-gups.txt"
-file5="data/colocate/gups/fifth-gups.txt"
+file1="data/colocate-autofmmr/gups/first-gups.txt"
+file2="data/colocate-autofmmr/gups/second-gups.txt"
+file3="data/colocate-autofmmr/gups/third-gups.txt"
+file4="data/colocate-autofmmr/gups/fourth-gups.txt"
+file5="data/colocate-autofmmr/gups/fifth-gups.txt"
 set datafile separator "\t"
 #set xtics axis rangelimited
 #set xtics scale 0.5 rotate by 25 offset -3,-0.5
@@ -24,7 +24,7 @@ set xlabel "Time (s)"
 set ylabel "GUPS"
 
 cpu_freq=2100000000
-start=`awk '{ if(min == 0) { min = $1 } else { min = $1 < min ? $1 : min } } END { print min }' data/colocate/gups/*.txt`
+start=`awk '{ if(min == 0) { min = $1 } else { min = $1 < min ? $1 : min } } END { print min }' data/colocate-autofmmr/gups/*.txt`
 
 #set title "GUPS Throughput"
 plot \

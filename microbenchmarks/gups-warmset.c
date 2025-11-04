@@ -163,6 +163,8 @@ static void *do_gups(void *arguments)
     perror("pthread_setaffinity_np");
     assert(0);
   }
+  fprintf(stderr, "pinned thread %d to core %d\n", args->tid, start_cpu + args->tid);
+  fflush(stderr);
 
   srand(args->tid);
   lfsr = rand();
@@ -229,6 +231,7 @@ int main(int argc, char **argv)
   pthread_t t[MAX_THREADS];
   char *log_filename;
   bool wait_for_signal = false;
+  char* start_cpu_str = NULL;
 
   // Stop waiting on receiving signal
   signal(SIGUSR1, signal_handler);
@@ -246,6 +249,11 @@ int main(int argc, char **argv)
   }
 
   gettimeofday(&starttime, NULL);
+
+  start_cpu_str = getenv("START_CPU");
+  if (start_cpu_str != NULL) {
+    start_cpu = atoi(start_cpu_str);
+  }
 
   threads = atoi(argv[1]);
   assert(threads <= MAX_THREADS);
