@@ -63,6 +63,14 @@ struct hemem_process {
   struct timeval timestamp;
 #endif
 
+#ifdef VULCAN
+  // use this as the indicator when adding process to lc list or be list
+  bool is_lc;
+  volatile double demand;
+  // this is optional
+  int credits;
+#endif
+
   _Atomic uint64_t volatile accessed_pages[NPBUFTYPES];
   _Atomic uint64_t volatile wrong_memtype;
   _Atomic uint64_t volatile samples[24];
@@ -107,5 +115,6 @@ struct hemem_process {
 
   pthread_mutex_t process_lock;
 };
+
 
 #endif
