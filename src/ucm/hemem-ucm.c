@@ -434,6 +434,12 @@ struct hemem_process* ucm_add_process(int fd, struct add_process_request* reques
   gettimeofday(&process->timestamp, NULL);
 #endif
 
+#ifdef VULCAN
+   process->is_lc = request->is_lc; //TODO: check the app side
+   process->demand = 0.0;
+   process->credits = 100; // everyone gets this default
+#endif
+
   snprintf(&logpath[0], sizeof(logpath) - 1, "/tmp/log-%d.txt", process->pid);
   process->logfd = fopen(logpath, "w");
   if (process->logfd == NULL) {

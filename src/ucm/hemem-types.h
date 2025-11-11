@@ -67,7 +67,6 @@ struct hemem_process {
   // use this as the indicator when adding process to lc list or be list
   bool is_lc;
   volatile double demand;
-  // this is optional
   int credits;
 #endif
 

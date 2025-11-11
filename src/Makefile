@@ -21,7 +21,7 @@ LIBS = -lm -lpthread
 HEMEM_LIBS = $(LIBS) -ldl -lsyscall_intercept
 
 default: all
-all:app central-manager lib-mmap-populate tmts-manager
+all:app central-manager lib-mmap-populate tmts-manager vulcan-manager
 app: libhemem.so libhemem-llama.so
 
 libhemem-llama.so: hemem-app-llama.o interpose-llama.o channel-shared-app.o channel-app.o logging-app.o
@@ -51,6 +51,10 @@ central-manager: ucm.o channel-shared.o channel-ucm.o timer.o hemem-ucm.o pebs.o
 tmts-manager: ${UCM}/ucm.c ${SHARED}/channel-shared.c ${UCM}/channel-ucm.c \
 			  ${UCM}/timer.c ${UCM}/hemem-ucm.c ${UCM}/pebs.c ${UCM}/fifo.c ${UCM}/spsc-ring.c ${SHARED}//logging.c
 	$(CC) $(SHARED_CFLAGS) $(SHARED_INCLUDES) $(UCM_CFLAGS) $(UCM_INCLUDES) -o $@ $^ -lpthread -D TMTS
+
+vulcan-manager: ${UCM}/ucm.c ${SHARED}/channel-shared.c ${UCM}/channel-ucm.c \
+			  ${UCM}/timer.c ${UCM}/hemem-ucm.c ${UCM}/pebs.c ${UCM}/fifo.c ${UCM}/spsc-ring.c ${SHARED}//logging.c
+	$(CC) $(SHARED_CFLAGS) $(SHARED_INCLUDES) $(UCM_CFLAGS) $(UCM_INCLUDES) -o $@ $^ -lpthread -D VULCAN
 
 ucm.o: ${UCM}/ucm.c
 	$(CC) $(UCM_CFLAGS) $(UCM_INCLUDES) -c ${UCM}/ucm.c
@@ -92,4 +96,4 @@ lib-mmap-populate-llama: lib_mmap_populate.c
 	$(CC) -D LLAMA lib_mmap_populate.c -fpic -shared -lsyscall_intercept -o libmmap_populate_llama.so
 
 clean:
-	$(RM) *.o *.so central-manager tmts-manager
+	$(RM) *.o *.so central-manager tmts-manager vulcan-manager

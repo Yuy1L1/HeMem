@@ -27,6 +27,7 @@ static struct process_list processes_list;
 //TODO: this needs to be properly defined in src/ucm/hemem-types.h
 static struct process_list lc_processes_list;
 static struct process_list be_processes_list;
+#define UNIT HUGEPAGE_SIZE
 #endif
 static struct page_list dram_free_list;
 static struct page_list nvm_free_list;
@@ -1216,12 +1217,10 @@ static inline int64_t min(int64_t a, int64_t b)
 }
 
 #ifdef VULCAN
-
-#define UNIT HUGEPAGE_SIZE
   // Helper to transfer one UNIT between two processes (with safety bounds)
-  // TODO: UNIT undefined!!! currently defined as 1 page...
 static inline int move_unit(struct hemem_process* from, struct hemem_process* to, uint64_t UNIT) {
-    if (from->current_dram < UNIT) return 0;
+    if (from->current_dram < UNIT) 
+      return 0;
     from->current_dram -= UNIT;
     to->current_dram   += UNIT;
     from->credits++;                 // losing credits hurts
@@ -1321,14 +1320,15 @@ void *pebs_policy_thread()
       usleep((uint64_t)((1.0 * TMTS_SLEEP_DELTA) - migrate_time));
     }
 #elif defined(VULCAN)
-    //vulcan logic here
+    struct timeval start, end;
+    gettimeofday(&start, NULL);
     const double EMA = 0.8;
 
     struct hemem_process* procs[MAX_PROCS];//TODO: no cap on MAX_PROCS? 
     int n = 0;
     for (struct hemem_process* p = lc_processes_list->head; p; p = p->next) procs[n++] = p;
     for (struct hemem_process* p = be_processes_list->head; p; p = p->next) procs[n++] = p;
-    if (n == 0) goto vulcan_sleep;//TODO havent defined vulcan_sleep
+    if (n == 0) goto vulcan_sleep;
     
     double GFMC = (double) DRAMSIZE /(double)total_processes;
 
@@ -1336,7 +1336,8 @@ void *pebs_policy_thread()
       struct hemem_process* pr = procs[i];
 
       // RSS_i in bytes?  use whatever your code already has (resident working set in use)
-      double RSS = (double)pr->rss_bytes; //TODO: what is RSS size for each process in FairMem?
+      double RSS = (double)pr->mem_allocated; 
+      //TODO: need to sanity current_dram, mem_allocate if in bytes or # of pages!!!!
 
       // GPT_i = min(1, GFMC / RSS_i)
       double GPT = 1.0;
@@ -1361,14 +1362,12 @@ void *pebs_policy_thread()
       }
 
     // step 3: algorithm 1
-    //TODO: is this the correct way to create process list here?
     struct hemem_process* lc_borrowers[MAX_PROCS]; int nlcb = 0;
     struct hemem_process* be_borrowers[MAX_PROCS]; int nbeb = 0;
     struct hemem_process* donors[MAX_PROCS];       int ndon = 0;
 
     for (int i = 0; i < n; i++) {
       struct hemem_process* pr = procs[i];
-
       if (proc->current_dram < proc->demand) { // borrower
         if (pr->is_lc) lc_borrowers[nlcb++] = pr;
         else           be_borrowers[nbeb++] = pr;
@@ -1383,51 +1382,51 @@ void *pebs_policy_thread()
 
 
   // Reallocate: LC borrowers first
-  for (int b = 0; b < nlcb; b++) {
-    struct hemem_process* br = lc_borrowers[b];
-    while ((double)br->current_dram + (double)UNIT <= br->demand) {
-      int moved = 0;
-      for (int d = 0; d < ndon; d++) {
-        if ((double)donors[d]->current_dram > donors[d]->demand + (double)UNIT) {
-          moved = move_unit(donors[d], br, UNIT);
-          if (moved) break;
-        }
-      }
-      if (!moved) {
-        // fallback: steal from BE with alloc > GFMC (line 11-13 in Algo 1)
-        struct hemem_process* steal = NULL;
-        for (int i = 0; i < n; i++) {
-          if (!procs[i]->is_lc && (double)procs[i]->current_dram > GFMC + (double)UNIT) {
-            steal = procs[i]; break;
+    for (int b = 0; b < nlcb; b++) {
+      struct hemem_process* br = lc_borrowers[b];
+      while ((double)br->current_dram + (double)UNIT <= br->demand) {
+        int moved = 0;
+        for (int d = 0; d < ndon; d++) {
+          if ((double)donors[d]->current_dram > donors[d]->demand + (double)UNIT) {
+            moved = move_unit(donors[d], br, UNIT);
+            if (moved) break;
           }
         }
-        if (!steal) break; // nothing else to do this round
-        move_unit(steal, br, UNIT);
-      }
-    }
-  }
-
-  // Now try BE borrowers (only from remaining donors)
-  for (int b = 0; b < nbeb; b++) {
-    struct hemem_process* br = be_borrowers[b];
-    while ((double)br->current_dram + (double)UNIT <= br->demand_bytes) {
-      int moved = 0;
-      for (int d = 0; d < ndon; d++) {
-        if ((double)donors[d]->current_dram > donors[d]->demand_bytes + (double)UNIT) {
-          moved = move_unit(donors[d], br, UNIT);
-          if (moved) break;
+        if (!moved) {
+        // fallback: steal from BE with alloc > GFMC (line 11-13 in Algo 1)
+          struct hemem_process* steal = NULL;
+          for (int i = 0; i < n; i++) {
+            if (!procs[i]->is_lc && (double)procs[i]->current_dram > GFMC + (double)UNIT) {
+              steal = procs[i]; break;
+            }
+          }
+          if (!steal) break; // nothing else to do this round
+          move_unit(steal, br, UNIT);
         }
       }
-      if (!moved) break;
     }
-  }
 
+    // Now try BE borrowers (only from remaining donors)
+    for (int b = 0; b < nbeb; b++) {
+      struct hemem_process* br = be_borrowers[b];
+      while ((double)br->current_dram + (double)UNIT <= br->demand_bytes) {
+        int moved = 0;
+        for (int d = 0; d < ndon; d++) {
+          if ((double)donors[d]->current_dram > donors[d]->demand_bytes + (double)UNIT) {
+            moved = move_unit(donors[d], br, UNIT);
+            if (moved) break;
+          }
+        }
+        if (!moved) break;
+      }
+    }
+
+    gettimeofday(&end, NULL);
+    printf("time spent in vulcan policy logic %.2f\n", elapsed(&start, &end));
 vulcan_sleep:
-  //TODO
-
-
+  //TODO: reread the paper, if not specified, sleep every 1 second
+  usleep(1000000);
 #else
-
     gettimeofday(&decision_start, NULL);
     if (timed_cooling) {
       needs_cooling = false;
@@ -1912,8 +1911,9 @@ void pebs_add_process(struct hemem_process *process)
   else {
     enqueue_process(&be_processes_list, process);
   }
-#endif
+#else
   enqueue_process(&processes_list, process);
+#endif
   pthread_mutex_lock(&(process->process_lock));
   process->current_miss_ratio = -1;
   process->current_nvm = 0;
@@ -1928,12 +1928,13 @@ void pebs_remove_process(struct hemem_process *process)
 {
 #ifdef VULCAN
   if (process->is_lc) == true {
-    process_list_remove(&ilc_processes_list, process);
+    process_list_remove(&lc_processes_list, process);
   } else {
     process_list_remove(&be_processes_list, process);
   }
-#endif
+#else
   process_list_remove(&processes_list, process);
+#endif
   pthread_mutex_lock(&(process->process_lock));
   process->current_dram = 0;
   process->current_nvm = 0;

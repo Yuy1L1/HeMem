@@ -156,6 +156,9 @@ int add_process()
   request.header.pid = pid;
   request.target_miss_ratio = target_miss_ratio;
   request.req_dram = required_dram;
+#ifdef VULCAN
+  request.is_lc = is_lc;
+#endif
   request.header.msg_size = sizeof(request);
 #ifdef LLAMA
   request.zero = true;
@@ -412,7 +415,26 @@ void hemem_app_init()
     required_dram = atoll(target_dram_str);
   }
   fprintf(stderr, "DRAM Requested: %lu\n", required_dram);
-  
+
+#ifdef VULCAN
+  bool is_lc = true; // defaulted to true
+  char* is_lc_string = getenv("LC_WORKLOAD_OR_NOT");
+  // if is lc is true, then need to put it in lc list
+  // else be list 
+  if (lc_env != NULL) {
+    // interpret "0" / "false" / "False" / "FALSE" as BE
+    if (strcmp(lc_env, "0") == 0 ||
+        strcasecmp(lc_env, "false") == 0) {
+        is_lc = false;
+    } else {
+        // anything else means LC (1 / true / TRUE / etc)
+        is_lc = true;
+    }
+  }
+  // sanity check
+  fprintf("current workload is LC? %d\n", is_lc);
+#endif
+
   status = add_process();
   if (status != 0) {
     perror("add process");

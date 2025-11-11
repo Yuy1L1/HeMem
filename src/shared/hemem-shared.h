@@ -121,6 +121,9 @@ struct add_process_request {
   double target_miss_ratio;
   uint64_t req_dram;
   bool zero;
+#ifdef VULCAN
+  bool is_lc;
+#endif
 };
 
 struct add_process_response {
