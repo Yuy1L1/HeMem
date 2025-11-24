@@ -14,6 +14,7 @@
 #include <sys/mman.h>
 #include <sched.h>
 #include <sys/ioctl.h>
+#include <math.h>
 
 #include "hemem-ucm.h"
 #include "pebs.h"
@@ -24,10 +25,8 @@
 
 static struct process_list processes_list;
 #ifdef VULCAN
-//TODO: this needs to be properly defined in src/ucm/hemem-types.h
 static struct process_list lc_processes_list;
 static struct process_list be_processes_list;
-#define UNIT HUGEPAGE_SIZE
 #endif
 static struct page_list dram_free_list;
 static struct page_list nvm_free_list;
@@ -59,7 +58,7 @@ int sample_periods[PEBS_NPROCS];
 bool disable_realloc = false;
 bool timed_cooling = false;
 bool autofmmr = false;
-
+bool vulcan = false;
 
 static long perf_event_open(struct perf_event_attr *hw_event, pid_t pid, 
     int cpu, int group_fd, unsigned long flags)
@@ -1226,7 +1225,16 @@ static inline int move_unit(struct hemem_process* from, struct hemem_process* to
     from->credits++;                 // losing credits hurts
     to->credits--;                   
     return 1;
-  };
+}
+
+static int cmp_min_credits(const void *a, const void *b) {
+    struct hemem_process *pr_a = *(struct hemem_process **)a;
+    struct hemem_process *pr_b = *(struct hemem_process **)b;
+
+    if (pr_a->credits < pr_b->credits) return -1;
+    if (pr_a->credits > pr_b->credits) return 1;
+    return 0;
+}
 #endif
 
 void *pebs_policy_thread()
@@ -1323,21 +1331,26 @@ void *pebs_policy_thread()
     struct timeval start, end;
     gettimeofday(&start, NULL);
     const double EMA = 0.8;
+    const size_t UNIT = PAGE_SIZE;
 
-    struct hemem_process* procs[MAX_PROCS];//TODO: no cap on MAX_PROCS? 
+    struct hemem_process* procs[MAX_PROCS]; 
     int n = 0;
-    for (struct hemem_process* p = lc_processes_list->head; p; p = p->next) procs[n++] = p;
-    for (struct hemem_process* p = be_processes_list->head; p; p = p->next) procs[n++] = p;
+    for (struct hemem_process *p = lc_processes_list.first; p; p = p->next)
+    	procs[n++] = p;
+
+    for (struct hemem_process *p = be_processes_list.first; p; p = p->next)
+        procs[n++] = p;
+
     if (n == 0) goto vulcan_sleep;
     
-    double GFMC = (double) DRAMSIZE /(double)total_processes;
+    double GFMC = (double) DRAMSIZE /(double)n;
 
     for (int i = 0; i < n; i++) {
       struct hemem_process* pr = procs[i];
 
       // RSS_i in bytes?  use whatever your code already has (resident working set in use)
       double RSS = (double)pr->mem_allocated; 
-      //TODO: need to sanity current_dram, mem_allocate if in bytes or # of pages!!!!
+      //sanity checked: current_dram, mem_allocated are in bytes
 
       // GPT_i = min(1, GFMC / RSS_i)
       double GPT = 1.0;
@@ -1349,7 +1362,7 @@ void *pebs_policy_thread()
       double hit_last_round = 1.0 - miss_last_round;
       double FTHR = EMA * hit_now + (1.0 - EMA) * hit_last_round;
       // update miss ratio as usual
-      pr->current_miss_ratio = (EMA * calc_miss_ratio(process)) + ((1 - EMA) * process->current_miss_ratio);
+      pr->current_miss_ratio = (EMA * calc_miss_ratio(pr)) + ((1 - EMA) * pr->current_miss_ratio);
 
       // demand_i = alloc_i + (GPT - FTHR) * RSS_i * log2(RSS_i)
       double log2_rss = log2(RSS > 0.0 ? RSS : 1.0);
@@ -1357,9 +1370,9 @@ void *pebs_policy_thread()
       pr->demand = alloc + (GPT - FTHR) * RSS * log2_rss;
 
       // clamp demand to sane range [0, RSS]
-      if (pr->demand < 0.0)      pr->demand_bytes = 0.0;
-      if (pr->demand > RSS)      pr->demand_bytes = RSS;
-      }
+      if (pr->demand < 0.0)      pr->demand = 0.0;
+      if (pr->demand > RSS)      pr->demand = RSS;
+    }
 
     // step 3: algorithm 1
     struct hemem_process* lc_borrowers[MAX_PROCS]; int nlcb = 0;
@@ -1368,20 +1381,25 @@ void *pebs_policy_thread()
 
     for (int i = 0; i < n; i++) {
       struct hemem_process* pr = procs[i];
-      if (proc->current_dram < proc->demand) { // borrower
+      double alloc = (double)pr->current_dram;
+      double dem   = pr->demand;
+
+      if (alloc + 1.0 < dem) { // borrower (tolerance 1 byte)
         if (pr->is_lc) lc_borrowers[nlcb++] = pr;
         else           be_borrowers[nbeb++] = pr;
       } else if (alloc > dem + 1.0) { // donor
-        donors[ndon++] = pr;
+         donors[ndon++] = pr;
       }
     }
 
     // sort donors by asending credits
     // qsort() defined in stdlib
+    // void qsort(void *base, size_t num, size_t size, int (*compar)(const void *, const void *));
+    // i need to define a comparator function.
     qsort(donors, ndon, sizeof(donors[0]), cmp_min_credits);
 
 
-  // Reallocate: LC borrowers first
+    // Reallocate: LC borrowers first
     for (int b = 0; b < nlcb; b++) {
       struct hemem_process* br = lc_borrowers[b];
       while ((double)br->current_dram + (double)UNIT <= br->demand) {
@@ -1409,10 +1427,10 @@ void *pebs_policy_thread()
     // Now try BE borrowers (only from remaining donors)
     for (int b = 0; b < nbeb; b++) {
       struct hemem_process* br = be_borrowers[b];
-      while ((double)br->current_dram + (double)UNIT <= br->demand_bytes) {
+      while ((double)br->current_dram + (double)UNIT <= br->demand) {
         int moved = 0;
         for (int d = 0; d < ndon; d++) {
-          if ((double)donors[d]->current_dram > donors[d]->demand_bytes + (double)UNIT) {
+          if ((double)donors[d]->current_dram > donors[d]->demand + (double)UNIT) {
             moved = move_unit(donors[d], br, UNIT);
             if (moved) break;
           }
@@ -1423,9 +1441,11 @@ void *pebs_policy_thread()
 
     gettimeofday(&end, NULL);
     printf("time spent in vulcan policy logic %.2f\n", elapsed(&start, &end));
+
 vulcan_sleep:
   //TODO: reread the paper, if not specified, sleep every 1 second
   usleep(1000000);
+
 #else
     gettimeofday(&decision_start, NULL);
     if (timed_cooling) {
@@ -1927,7 +1947,7 @@ void pebs_add_process(struct hemem_process *process)
 void pebs_remove_process(struct hemem_process *process)
 {
 #ifdef VULCAN
-  if (process->is_lc) == true {
+  if (process->is_lc == true) {
     process_list_remove(&lc_processes_list, process);
   } else {
     process_list_remove(&be_processes_list, process);
@@ -2043,7 +2063,9 @@ void pebs_init(void)
   printf("AUTOFMMR %d\n", autofmmr);
 
   char *c_vulcan = getenv("VULCAN");
-  if (c_vulcan != NULL) vulcan=atoic(c_vulcan);
+  if (c_vulcan != NULL) {
+    vulcan = atoi(c_vulcan);
+  }
   printf("vulcan %d\n", vulcan);
 
   char *c_disable_realloc = getenv("NOREALLOC");

@@ -29,7 +29,9 @@
 
 #define MAX_EVENTS 128
 
-#define MAX_PROCESSES 24
+#ifdef VULCAN
+#define MAX_PROCS 24
+#endif
 
 #define FAULT_THREAD_CPU  (0)
 #define LISTEN_THREAD_CPU (FAULT_THREAD_CPU)
