@@ -54,7 +54,7 @@ tmts-manager: ${UCM}/ucm.c ${SHARED}/channel-shared.c ${UCM}/channel-ucm.c \
 
 vulcan-manager: ${UCM}/ucm.c ${SHARED}/channel-shared.c ${UCM}/channel-ucm.c \
 			  ${UCM}/timer.c ${UCM}/hemem-ucm.c ${UCM}/pebs.c ${UCM}/fifo.c ${UCM}/spsc-ring.c ${SHARED}//logging.c
-	$(CC) -D VULCAN $(SHARED_CFLAGS) $(SHARED_INCLUDES) $(UCM_CFLAGS) $(UCM_INCLUDES) -o $@ $^ -lpthread -lm
+	$(CC) -D VULCAN $(SHARED_CFLAGS) $(SHARED_INCLUDES) $(UCM_CFLAGS) $(UCM_INCLUDES) -o $@ $^ -lpthread -lm #-Wno-unused-variable
 
 ucm.o: ${UCM}/ucm.c
 	$(CC) $(UCM_CFLAGS) $(UCM_INCLUDES) -c ${UCM}/ucm.c

@@ -65,16 +65,17 @@ struct hemem_process {
 
 #ifdef VULCAN
   // use this as the indicator when adding process to lc list or be list
-  bool    is_lc;                 
-  volatile double  demand;          // in bytes
-  int64_t credits;               // CBFRP credits for tie-breaking
+  bool              is_lc;                 
+  volatile uint64_t demand;          // in bytes
+  volatile uint64_t projected_dram;  // in bytes
+  int64_t           credits;         // CBFRP credits for tie-breaking
 #endif
 
   _Atomic uint64_t volatile accessed_pages[NPBUFTYPES];
   _Atomic uint64_t volatile wrong_memtype;
   _Atomic uint64_t volatile samples[24];
   double target_miss_ratio;
-  double volatile current_miss_ratio;
+  volatile double current_miss_ratio;
   int64_t decay_factor;
   int64_t prev_page_transfer;
   FILE* logfd;

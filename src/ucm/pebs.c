@@ -1216,16 +1216,6 @@ static inline int64_t min(int64_t a, int64_t b)
 }
 
 #ifdef VULCAN
-  // Helper to transfer one UNIT between two processes (with safety bounds)
-static inline int move_unit(struct hemem_process* from, struct hemem_process* to, uint64_t UNIT) {
-    if (from->current_dram < UNIT) 
-      return 0;
-    from->current_dram -= UNIT;
-    to->current_dram   += UNIT;
-    from->credits++;                 // losing credits hurts
-    to->credits--;                   
-    return 1;
-}
 
 static int cmp_min_credits(const void *a, const void *b) {
     struct hemem_process *pr_a = *(struct hemem_process **)a;
@@ -1330,121 +1320,248 @@ void *pebs_policy_thread()
 #elif defined(VULCAN)
     struct timeval start, end;
     gettimeofday(&start, NULL);
+    printf("sanity check: line 1333 inside vulcan policy\n");
     const double EMA = 0.8;
-    const size_t UNIT = PAGE_SIZE;
 
-    struct hemem_process* procs[MAX_PROCS]; 
     int n = 0;
     for (struct hemem_process *p = lc_processes_list.first; p; p = p->next)
     	procs[n++] = p;
 
     for (struct hemem_process *p = be_processes_list.first; p; p = p->next)
-        procs[n++] = p;
+      procs[n++] = p;
 
+    printf("sanity check: current total number of process is %d\n", n);
     if (n == 0) goto vulcan_sleep;
     
+    // DRAMSIZE is also in bytes. it is defined as macros, like
+    // #define DRAMSIZE  (64L * (1024L * 1024L * 1024L))
     double GFMC = (double) DRAMSIZE /(double)n;
 
+    // all processes put into one list, just doing math here
     for (int i = 0; i < n; i++) {
       struct hemem_process* pr = procs[i];
+      pthread_mutex_lock(&(pr->process_lock));
 
-      // RSS_i in bytes?  use whatever your code already has (resident working set in use)
-      double RSS = (double)pr->mem_allocated; 
-      //sanity checked: current_dram, mem_allocated are in bytes
+      // sanity checked: current_dram, mem_allocated are in bytes
+      // current_dram is the memory allocated in the dram(fast tier)
+      // current_nvm is the memory allocated in the nvm(slow tier)
+      // mem_allocated is the RSS, ideally, mem_allocated = current_dram + current_nvm 
+      double rss = (double)pr->mem_allocated;
 
-      // GPT_i = min(1, GFMC / RSS_i)
-      double GPT = 1.0;
-      if (RSS > 0.0 && GFMC < RSS) GPT = GFMC / RSS;
+      // GPT = min(1, GFMC / RSS)
+      double gpt = 1.0;
+      if (GFMC < rss) gpt = GFMC / rss;
 
-      // FTHR_i EMA: current sample = 1 - miss_ratio_now
-      double hit_now  = 1.0 - calc_miss_ratio(pr);
-      double miss_last_round = pr->current_miss_ratio;
-      double hit_last_round = 1.0 - miss_last_round;
-      double FTHR = EMA * hit_now + (1.0 - EMA) * hit_last_round;
-      // update miss ratio as usual
-      pr->current_miss_ratio = (EMA * calc_miss_ratio(pr)) + ((1 - EMA) * pr->current_miss_ratio);
+      double fthr = 0.0;
+       // FTHR_i = EMA * hit + (1-EMA) * hit in last round
+      if (pr->accessed_pages[DRAMREAD] + pr->accessed_pages[NVMREAD] != 0) {
+          // We have fresh data this round
+          double miss_now = calc_miss_ratio(pr);   // [0,1]
+          if (miss_now < 0.0) miss_now = 0.0;
+          if (miss_now > 1.0) miss_now = 1.0;
 
-      // demand_i = alloc_i + (GPT - FTHR) * RSS_i * log2(RSS_i)
-      double log2_rss = log2(RSS > 0.0 ? RSS : 1.0);
-      double alloc    = (double)pr->current_dram; 
-      pr->demand = alloc + (GPT - FTHR) * RSS * log2_rss;
+          double hit_now = 1.0 - miss_now;
 
-      // clamp demand to sane range [0, RSS]
-      if (pr->demand < 0.0)      pr->demand = 0.0;
-      if (pr->demand > RSS)      pr->demand = RSS;
+          if (pr->current_miss_ratio < 0.0) {
+              // First time: no valid "last" value, so don't do EMA with junk
+              // Use the raw sample for both miss_ratio and fthr.
+              pr->current_miss_ratio = miss_now;
+              fthr = hit_now;
+          } else {
+              // Normal WMA update for both miss_ratio and fthr
+              double hit_last = 1.0 - pr->current_miss_ratio;
+              fthr = EMA * hit_now + (1.0 - EMA) * hit_last;
+              pr->current_miss_ratio = EMA * miss_now + (1.0 - EMA) * pr->current_miss_ratio;
+          }
+          pr->accessed_pages[DRAMREAD] = 0; pr->accessed_pages[NVMREAD]  = 0;
+      } else {
+          // No new accesses this round
+          if (pr->current_miss_ratio == -1) {
+              // No history, no new data: totally blind.
+              // Choose a neutral default; 1.0 means “assume all hits”.
+              fthr = 1.0;
+          } else {
+              // Reuse last hit ratio (no update)
+              fthr = 1.0 - pr->current_miss_ratio;
+          }
+      }
+      
+      printf("sanity check: current total number of process is %.2f\n", fthr);
+
+      // demand_i = alloc_i + (gpt - fthr) * RSS_i * log2(RSS_i)
+      double alloc  = (double)pr->current_dram; //this is the de facto DRAM usage!!
+      double demand = alloc + (gpt - fthr) * rss * log2(rss);
+
+      // sanity clamp the demand(self added)
+      if (demand < 0.0) demand = 0;
+      if (demand > rss) demand = rss;
+
+      // writing back
+      pr->demand = (uint64_t)demand;
+      // Algo 1 starts here
+      // 0. adjust alloc (line 1-2)
+      // projected dram usage = min(demand_i, GFMC)
+      if (demand > GFMC) pr->projected_dram = GFMC;
+      else pr->projected_dram = demand;
+
+      pthread_mutex_unlock(&(pr->process_lock));
     }
 
-    // step 3: algorithm 1
+    // Algo 1 cont'l
+    // 1. need to build lc_borrowers, be_borrowers and donors(line 3-5)
     struct hemem_process* lc_borrowers[MAX_PROCS]; int nlcb = 0;
     struct hemem_process* be_borrowers[MAX_PROCS]; int nbeb = 0;
     struct hemem_process* donors[MAX_PROCS];       int ndon = 0;
 
     for (int i = 0; i < n; i++) {
       struct hemem_process* pr = procs[i];
-      double alloc = (double)pr->current_dram;
-      double dem   = pr->demand;
+      pthread_mutex_lock(&(pr->process_lock));
 
-      if (alloc + 1.0 < dem) { // borrower (tolerance 1 byte)
-        if (pr->is_lc) lc_borrowers[nlcb++] = pr;
-        else           be_borrowers[nbeb++] = pr;
-      } else if (alloc > dem + 1.0) { // donor
+      if (pr->projected_dram < pr->demand) { 
+        if (pr->is_lc){
+          // lc borrowers list
+          lc_borrowers[nlcb++] = pr;
+        } else {
+          // be borrowers list
+          be_borrowers[nbeb++] = pr;
+        }           
+      } else { 
+        // donors
          donors[ndon++] = pr;
       }
+      pthread_mutex_unlock(&(pr->process_lock));
     }
 
+    printf("sanity check here, line 1437. lc borrowers: %d, be borrowers: %d, donors: %d", nlcb, nbeb, ndon);
     // sort donors by asending credits
-    // qsort() defined in stdlib
-    // void qsort(void *base, size_t num, size_t size, int (*compar)(const void *, const void *));
+    // qsort() defined in stdlib. void qsort(void *base, size_t num, size_t size, int (*compar)(const void *, const void *));
     // i need to define a comparator function.
     qsort(donors, ndon, sizeof(donors[0]), cmp_min_credits);
 
 
-    // Reallocate: LC borrowers first
-    for (int b = 0; b < nlcb; b++) {
-      struct hemem_process* br = lc_borrowers[b];
-      while ((double)br->current_dram + (double)UNIT <= br->demand) {
-        int moved = 0;
-        for (int d = 0; d < ndon; d++) {
-          if ((double)donors[d]->current_dram > donors[d]->demand + (double)UNIT) {
-            moved = move_unit(donors[d], br, UNIT);
-            if (moved) break;
-          }
+    // Algo 1: line 6 - 17
+    while (nlcb > 0 || nbeb > 0) {
+        // Pick borrower set: LC_borrowers if non-empty, else BE_borrowers
+        int from_lc = (nlcb > 0);
+        int bi_pos;   // position inside borrower array
+        int bi;       // global index in procs[]
+        if (from_lc) {
+            bi_pos = nlcb - 1;              // take last LC borrower
+            bi     = lc_borrowers[bi_pos];
+        } else {
+            bi_pos = nbeb - 1;             // take last BE borrower
+            bi     = be_borrowers[bi_pos];
         }
-        if (!moved) {
-        // fallback: steal from BE with alloc > GFMC (line 11-13 in Algo 1)
-          struct hemem_process* steal = NULL;
-          for (int i = 0; i < n; i++) {
-            if (!procs[i]->is_lc && (double)procs[i]->current_dram > GFMC + (double)UNIT) {
-              steal = procs[i]; break;
+
+        struct hemem_process *borrower = procs[bi];
+        pthread_mutex_lock(&(borrower->process_lock));
+        // If already satisfied, remove from borrowers and continue
+        // Algo 1, line 16  
+        if (borrower->projected_dram == borrower->demand) {
+            if (from_lc) {
+                lc_borrowers[bi_pos] = lc_borrowers[nlcb - 1];
+                nlcb--;
+            } else {
+                be_borrowers[bi_pos] = be_borrowers[nbeb - 1];
+                nbeb--;
+            }
+            pthread_mutex_unlock(&(borrower->process_lock));
+            continue;
+        }
+
+        int donated = 0;
+
+        // Case 1: donors set not null -> pick donor with minimum credits
+        if (ndon > 0) {
+          // we qsort in each round, this ensures the one with minimal credit is put in front
+          // Algo 1, line 9, select the one with minimum credits
+          int dj = donors[0];
+          struct hemem_process *donor = procs[dj];
+          pthread_mutex_lock(&(donor->process_lock));
+          // transfer one UNIT from d* to b*
+          donor->projected_dram -= UNIT;
+          borrower->projected_dram += UNIT;
+
+          // TODO: placeholders for now, should be some put in request kind of function
+          //vulcan_request_migrate_down(donor, UNIT);
+          //vulcan_request_migrate_up(borrower, UNIT);
+
+          // update credits
+          donor->credits++;
+          borrower->credits--;
+
+          donated = 1;
+          pthread_mutex_unlock(&(donor->process_lock));
+          pthread_mutex_unlock(&(borrower->process_lock));
+          printf("sanity check here. line 1497. exit in case 1\n");
+          break;
+
+          // if none of the donors has surplus, treat as donors exhausted
+          if (!donated) ndon = 0;
+        }
+
+        // Case 2: donors exhausted, b* is LC, and BE_borrowers not null
+        if (!donated && borrower->is_lc && nbeb > 0) {
+          // pick any BE task with alloc > GFMC (Algorithm 1 line 12)
+          for (int j = 0; j < nbeb; j++) {
+            int bj = be_borrowers[j];
+            struct hemem_process *be_donor = procs[bj];
+            pthread_mutex_lock(&(be_donor->process_lock));
+
+            if (be_donor->projected_dram > GFMC) {
+              be_donor->projected_dram -= UNIT;
+              borrower->projected_dram += UNIT;
+
+              // TODO: placeholders for now
+              //vulcan_request_migrate_down(d, UNIT);
+              //vulcan_request_migrate_up(b, UNIT);
+
+              be_donor->credits++;
+              borrower->credits--;
+
+              donated = 1;
+              pthread_mutex_unlock(&(be_donor->process_lock));
+              pthread_mutex_unlock(&(borrower->process_lock));
+              printf("sanity check here. line 1526. exit in case 2\n");
+              break;
             }
           }
-          if (!steal) break; // nothing else to do this round
-          move_unit(steal, br, UNIT);
         }
-      }
+
+        // Case 3: nothing to give -> return (Algo 1, line 14)
+        if (!donated) {
+            break;
+        }
     }
 
-    // Now try BE borrowers (only from remaining donors)
-    for (int b = 0; b < nbeb; b++) {
-      struct hemem_process* br = be_borrowers[b];
-      while ((double)br->current_dram + (double)UNIT <= br->demand) {
-        int moved = 0;
-        for (int d = 0; d < ndon; d++) {
-          if ((double)donors[d]->current_dram > donors[d]->demand + (double)UNIT) {
-            moved = move_unit(donors[d], br, UNIT);
-            if (moved) break;
+    // real migration starts here!!!
+    for (int i = 0; i < n; i++) {
+      struct hemem_process* pr = procs[i];
+      pthread_mutex_lock(&(pr->process_lock));
+      // TODO: migration happens here!!!!!
+      if (pr->projected_dram == pr-> current_dram){
+        continue;
+      }else {
+        if (pr->projected_dram < pr-> current_dram){
+          pebs_migrate_down();
+        }
+        else{
+          if (dram_free_list != NULL){
+            pebs_migrate_up();
+          }
+          else {
+            //TODO
           }
         }
-        if (!moved) break;
       }
+      pthread_mutex_unlock(&(pr->process_lock));
     }
 
     gettimeofday(&end, NULL);
     printf("time spent in vulcan policy logic %.2f\n", elapsed(&start, &end));
 
 vulcan_sleep:
-  //TODO: reread the paper, if not specified, sleep every 1 second
-  usleep(1000000);
+    usleep(1000000);
 
 #else
     gettimeofday(&decision_start, NULL);
@@ -2066,7 +2183,7 @@ void pebs_init(void)
   if (c_vulcan != NULL) {
     vulcan = atoi(c_vulcan);
   }
-  printf("vulcan %d\n", vulcan);
+  printf("VULCAN %d\n", vulcan);
 
   char *c_disable_realloc = getenv("NOREALLOC");
   if (c_disable_realloc != NULL) {
