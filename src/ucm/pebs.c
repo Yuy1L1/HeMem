@@ -1216,6 +1216,7 @@ static inline int64_t min(int64_t a, int64_t b)
 }
 
 #ifdef VULCAN
+#define UNIT PAGE_SIZE
 
 static int cmp_min_credits(const void *a, const void *b) {
     struct hemem_process *pr_a = *(struct hemem_process **)a;
@@ -1224,6 +1225,15 @@ static int cmp_min_credits(const void *a, const void *b) {
     if (pr_a->credits < pr_b->credits) return -1;
     if (pr_a->credits > pr_b->credits) return 1;
     return 0;
+}
+
+//TODO: am I building wheels here??? is there anything we can reuse?
+static uint64_t vulcan_migrate_up(struct hemem_process *process, uint64_t budget_bytes){
+  return 0;
+}
+
+static uint64_t vulcan_migrate_down(struct hemem_process *process, uint64_t budget_bytes) {
+  return 0;
 }
 #endif
 
@@ -1322,10 +1332,11 @@ void *pebs_policy_thread()
     gettimeofday(&start, NULL);
     printf("sanity check: line 1333 inside vulcan policy\n");
     const double EMA = 0.8;
+    struct hemem_process *procs[MAX_PROCS];
 
     int n = 0;
     for (struct hemem_process *p = lc_processes_list.first; p; p = p->next)
-    	procs[n++] = p;
+      procs[n++] = p;
 
     for (struct hemem_process *p = be_processes_list.first; p; p = p->next)
       procs[n++] = p;
@@ -1440,121 +1451,101 @@ void *pebs_policy_thread()
 
 
     // Algo 1: line 6 - 17
+    // this while loop is lock free. there could be issues :(
     while (nlcb > 0 || nbeb > 0) {
-        // Pick borrower set: LC_borrowers if non-empty, else BE_borrowers
-        int from_lc = (nlcb > 0);
-        int bi_pos;   // position inside borrower array
-        int bi;       // global index in procs[]
-        if (from_lc) {
-            bi_pos = nlcb - 1;              // take last LC borrower
-            bi     = lc_borrowers[bi_pos];
-        } else {
-            bi_pos = nbeb - 1;             // take last BE borrower
-            bi     = be_borrowers[bi_pos];
-        }
+      // Pick borrower set: LC_borrowers if non-empty, else BE_borrowers 
+      int from_lc = (nlcb > 0);
+      int b_pos; 
+      struct hemem_process *borrower; 
+      if(from_lc){ 
+        b_pos = nlcb - 1; 
+        borrower = lc_borrowers[b_pos]; 
+      } else { 
+        b_pos = nbeb - 1; 
+        borrower = be_borrowers[b_pos]; 
+      } 
+      
+      // If already satisfied, remove from borrowers and continue 
+      // Algo 1, line 16. early check 
+      if (borrower->projected_dram >= borrower->demand) { 
+        if (from_lc) { 
+          lc_borrowers[b_pos] = lc_borrowers[nlcb - 1]; 
+          nlcb--; 
+        } else { 
+          be_borrowers[b_pos] = be_borrowers[nbeb - 1];
+          nbeb--; 
+        } continue; 
+      }
 
-        struct hemem_process *borrower = procs[bi];
-        pthread_mutex_lock(&(borrower->process_lock));
-        // If already satisfied, remove from borrowers and continue
-        // Algo 1, line 16  
-        if (borrower->projected_dram == borrower->demand) {
-            if (from_lc) {
-                lc_borrowers[bi_pos] = lc_borrowers[nlcb - 1];
-                nlcb--;
-            } else {
-                be_borrowers[bi_pos] = be_borrowers[nbeb - 1];
-                nbeb--;
-            }
-            pthread_mutex_unlock(&(borrower->process_lock));
-            continue;
-        }
+      int donated = 0;
 
-        int donated = 0;
+      // Case 1: donors set not null -> pick donor with minimum credits
+      if (ndon > 0) {
+        // we qsort in each round, this ensures the one with minimal credit is put in front
+        // Algo 1, line 9, select the one with minimum credits
+        struct hemem_process *donor = donors[0];
 
-        // Case 1: donors set not null -> pick donor with minimum credits
-        if (ndon > 0) {
-          // we qsort in each round, this ensures the one with minimal credit is put in front
-          // Algo 1, line 9, select the one with minimum credits
-          int dj = donors[0];
-          struct hemem_process *donor = procs[dj];
-          pthread_mutex_lock(&(donor->process_lock));
-          // transfer one UNIT from d* to b*
-          donor->projected_dram -= UNIT;
+        // transfer one UNIT from d* to b*
+        if (donor->projected_dram >= donor->demand + UNIT) {
+          donor->projected_dram   -= UNIT;
           borrower->projected_dram += UNIT;
 
-          // TODO: placeholders for now, should be some put in request kind of function
-          //vulcan_request_migrate_down(donor, UNIT);
-          //vulcan_request_migrate_up(borrower, UNIT);
-
-          // update credits
           donor->credits++;
           borrower->credits--;
 
           donated = 1;
-          pthread_mutex_unlock(&(donor->process_lock));
-          pthread_mutex_unlock(&(borrower->process_lock));
-          printf("sanity check here. line 1497. exit in case 1\n");
-          break;
-
-          // if none of the donors has surplus, treat as donors exhausted
-          if (!donated) ndon = 0;
+        } else {
+        // donors[0] has no surplus left. treat donors as exhausted
+          ndon = 0;
         }
+      }
 
-        // Case 2: donors exhausted, b* is LC, and BE_borrowers not null
-        if (!donated && borrower->is_lc && nbeb > 0) {
-          // pick any BE task with alloc > GFMC (Algorithm 1 line 12)
-          for (int j = 0; j < nbeb; j++) {
-            int bj = be_borrowers[j];
-            struct hemem_process *be_donor = procs[bj];
-            pthread_mutex_lock(&(be_donor->process_lock));
+      // Case 2: donors exhausted, b* is LC, and BE_borrowers not null
+      if (!donated && borrower->is_lc) {
+        for (int j = 0; j < n; j++) {
+          struct hemem_process *p = procs[j];
+          if (p->is_lc) continue;
+            
+          if (p->projected_dram > GFMC + UNIT) {
+            // steal from this BE process
+            p->projected_dram   -= UNIT;
+            borrower->projected_dram += UNIT;
 
-            if (be_donor->projected_dram > GFMC) {
-              be_donor->projected_dram -= UNIT;
-              borrower->projected_dram += UNIT;
+            p->credits++;
+            borrower->credits--;
 
-              // TODO: placeholders for now
-              //vulcan_request_migrate_down(d, UNIT);
-              //vulcan_request_migrate_up(b, UNIT);
-
-              be_donor->credits++;
-              borrower->credits--;
-
-              donated = 1;
-              pthread_mutex_unlock(&(be_donor->process_lock));
-              pthread_mutex_unlock(&(borrower->process_lock));
-              printf("sanity check here. line 1526. exit in case 2\n");
-              break;
-            }
-          }
-        }
-
-        // Case 3: nothing to give -> return (Algo 1, line 14)
-        if (!donated) {
+            donated = 1;
             break;
-        }
-    }
-
-    // real migration starts here!!!
-    for (int i = 0; i < n; i++) {
-      struct hemem_process* pr = procs[i];
-      pthread_mutex_lock(&(pr->process_lock));
-      // TODO: migration happens here!!!!!
-      if (pr->projected_dram == pr-> current_dram){
-        continue;
-      }else {
-        if (pr->projected_dram < pr-> current_dram){
-          pebs_migrate_down();
-        }
-        else{
-          if (dram_free_list != NULL){
-            pebs_migrate_up();
-          }
-          else {
-            //TODO
           }
         }
       }
-      pthread_mutex_unlock(&(pr->process_lock));
+
+
+      // Case 3: nothing to give -> return (Algo 1, line 14)
+      if (!donated) {
+          break;
+      }
+    }
+
+    // TODO:real migration starts here!!!
+    // key idea: separate the control plane and data plane
+    for (int i = 0; i < n; i++) {
+      struct hemem_process *pr = procs[i];
+      pthread_mutex_lock(&pr->process_lock);
+
+      int64_t delta = (int64_t)pr->projected_dram - (int64_t)pr->current_dram;
+
+      if (delta < 0) {
+        // has too much DRAM, must migrate down -delta bytes
+        uint64_t migrate_down_bytes = (uint64_t)(-delta);
+        vulcan_migrate_down(pr, migrate_down_bytes);
+      }
+      else if (delta > 0) {
+        uint64_t migrate_up_bytes = (uint64_t)delta;
+        vulcan_migrate_up(pr, migrate_up_bytes);
+
+      }
+      pthread_mutex_unlock(&pr->process_lock);
     }
 
     gettimeofday(&end, NULL);
