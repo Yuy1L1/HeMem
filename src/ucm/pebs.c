@@ -1227,14 +1227,115 @@ static int cmp_min_credits(const void *a, const void *b) {
     return 0;
 }
 
-//TODO: am I building wheels here??? is there anything we can reuse?
-static uint64_t vulcan_migrate_up(struct hemem_process *process, uint64_t budget_bytes){
-  return 0;
+static void vulcan_migrate_down(struct hemem_process *process, uint64_t budget_bytes){
+    uint64_t migrated_bytes = 0;
+
+    // Cap per-process budget by global per-interval limit
+    uint64_t cap = budget_bytes;
+    if (cap > PEBS_MIGRATE_RATE) {
+        cap = PEBS_MIGRATE_RATE;
+    }
+
+    while (migrated_bytes < cap) {
+        // 1) pick a cold DRAM page to demote
+        struct hemem_page *page = dequeue_page(&(process->dram_lists[COLD]));
+        if (page == NULL) {
+            // no more cold DRAM pages
+            break;
+        }
+
+        assert(page->in_dram);
+
+        // 2) get a free NVM slot
+        struct hemem_page *np = dequeue_page(&nvm_free_list);
+        if (np == NULL) {
+            // no free NVM: put page back and stop
+            enqueue_page(&(process->dram_lists[COLD]), page);
+            break;
+        }
+
+        assert(!np->present);
+        assert(np->pid == -1);
+
+        // 3) perform the actual migration down
+        uint64_t old_offset = page->devdax_offset;
+        pebs_migrate_down(process, page, np->devdax_offset);
+
+        // 4) recycle np to represent a free DRAM frame (swap offsets)
+        np->devdax_offset = old_offset;
+        np->in_dram  = true;
+        np->present  = false;
+        assert(np->hot == COLD);
+        for (int i = 0; i < NPBUFTYPES; i++) {
+            assert(np->accesses[i] == 0);
+            assert(np->tot_accesses[i] == 0);
+        }
+
+        // 5) page is now an NVM page (start as COLD)
+        page->hot = COLD;
+        enqueue_page(&(process->nvm_lists[COLD]), page);
+        enqueue_page(&dram_free_list, np);
+
+        migrated_bytes += pt_to_pagesize(page->pt);
+    }
 }
 
-static uint64_t vulcan_migrate_down(struct hemem_process *process, uint64_t budget_bytes) {
-  return 0;
+
+
+static void vulcan_migrate_up(struct hemem_process *process, uint64_t budget_bytes)
+{
+
+  struct hemem_page *p;
+  uint64_t migrated_bytes = 0;
+
+  printf("VULCAN migrate up for process %d with budget %lu bytes\n", process->pid, budget_bytes);
+
+
+  uint64_t cap = budget_bytes;
+    if (cap > PEBS_MIGRATE_RATE) {
+        cap = PEBS_MIGRATE_RATE;
+    }
+  // TODO: the rest the exactly the same as tmts_migrate_up...
+  // while we still have budget to migrate up
+  while (migrated_bytes < cap) {
+    p = dequeue_page(&(process->nvm_lists[HOT1]));
+    if (p == NULL) {
+      // no more pages to migrate
+      break;
+    }
+
+    assert(p->pid == process->pid);
+    assert(!p->in_dram);
+    struct hemem_page *np = dequeue_page(&dram_free_list);
+    if (np == NULL) {
+      // no free dram to migrate up
+      enqueue_page(&(process->nvm_lists[HOT1]), p);
+      return;
+    }
+    assert(!np->present);
+    assert(np->pid == -1);
+    assert(np->in_dram);
+
+    uint64_t old_offset = p->devdax_offset;
+    pebs_migrate_up(process, p, np->devdax_offset);
+    np->devdax_offset = old_offset;
+    np->in_dram = false;
+    np->present = false;
+    assert(np->hot == COLD);
+    for (int i = 0; i < NPBUFTYPES; i++) {
+      assert(np->accesses[i] == 0);
+      assert(np->tot_accesses[i] == 0);
+    }
+
+    p->hot = COLD;
+    enqueue_page(&(process->dram_lists[COLD]), p);
+    enqueue_page(&nvm_free_list, np);
+
+    migrated_bytes += pt_to_pagesize(p->pt);
+  }
 }
+
+
 #endif
 
 void *pebs_policy_thread()
