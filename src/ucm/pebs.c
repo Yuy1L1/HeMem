@@ -1334,8 +1334,9 @@ static void vulcan_migrate_up(struct hemem_process *process, uint64_t budget_byt
     migrated_bytes += pt_to_pagesize(p->pt);
   }
 }
-
-
+//#warning "from ucm/pebs.c, vulcan defined"
+//#else
+//#warning "from ucm/pebs.c, vulcan UNDEFINED!!!"
 #endif
 
 void *pebs_policy_thread()
@@ -1431,7 +1432,7 @@ void *pebs_policy_thread()
 #elif defined(VULCAN)
     struct timeval start, end;
     gettimeofday(&start, NULL);
-    printf("sanity check: line 1333 inside vulcan policy\n");
+    // printf("sanity check: line 1435 inside vulcan policy\n");
     const double EMA = 0.8;
     struct hemem_process *procs[MAX_PROCS];
 
@@ -1449,7 +1450,7 @@ void *pebs_policy_thread()
         be_count++;
     }
     
-    printf("sanity check: total procs=%d, lc=%d, be=%d\n", n, lc_count, be_count); 
+    printf("sanity check: line 1453. total procs=%d, lc=%d, be=%d\n", n, lc_count, be_count); 
     if (n == 0) goto vulcan_sleep;
     
     // DRAMSIZE is also in bytes. it is defined as macros, like
@@ -1505,7 +1506,7 @@ void *pebs_policy_thread()
           }
       }
       
-      printf("sanity check: current fast tier hit ratio is %.2f\n", fthr);
+      printf("sanity check: line 1509. current fast tier hit ratio is %.2f\n", fthr);
 
       // demand_i = alloc_i + (gpt - fthr) * RSS_i * log2(RSS_i)
       double alloc  = (double)pr->current_dram; //this is the de facto DRAM usage!!
@@ -1656,7 +1657,7 @@ void *pebs_policy_thread()
     }
 
     gettimeofday(&end, NULL);
-    printf("sanity check: time spent in vulcan policy logic %.2f\n", elapsed(&start, &end));
+    printf("sanity check: time spent in vulcan policy logic %f s\n", elapsed(&start, &end));
 
 vulcan_sleep:
     usleep(1000000);
@@ -2140,7 +2141,7 @@ void pebs_add_process(struct hemem_process *process)
   // equal to the amount of cold dram the processes of lower
   // priority are using
 #ifdef VULCAN
-  printf("sanity check: line 2143. process->lc is %d\n", process->is_lc);
+  // printf("sanity check: line 2144. process->lc is %d\n", process->is_lc);
   if (process->is_lc) {
     enqueue_process(&lc_processes_list, process);
   }
@@ -2314,31 +2315,42 @@ void pebs_shutdown()
   }
 }
 
-void count_pages()
+static void count_pages_for_list(struct hemem_process *head,
+                                 double *dram_usage,
+                                 double *nvm_usage)
 {
-  struct hemem_process *process;//, *tmp;
-  struct timeval now;
+  struct hemem_process *process;
   int i;
-  gettimeofday(&now, NULL);
-  double dram_usage = 0, nvm_usage = 0;
-  //process = peek_process(&processes_list);
-  process = processes_list.first;
-  while (process != NULL) {
-    //pthread_mutex_lock(&(process->process_lock));
-    fprintf(process->logfd, "%ld\t%f\t%lu\t%lu", rdtscp(), process->current_miss_ratio, process->current_dram, process->current_nvm);
-    //fprintf(process->logfd, "%ld\t%f\t%lu\t%lu", rdtscp(), calc_miss_ratio(process), process->current_dram, process->current_nvm);
-    fprintf(process->logfd, "\tdram_lists: [%lu", process->dram_lists[COLD].numentries);
+
+  for (process = head; process != NULL; process = process->next) {
+    fprintf(process->logfd, "%ld\t%f\t%lu\t%lu",
+            rdtscp(), process->current_miss_ratio,
+            process->current_dram, process->current_nvm);
+
+    fprintf(process->logfd, "\tdram_lists: [%lu",
+            process->dram_lists[COLD].numentries);
     for (i = 1; i < NUM_HOTNESS_LEVELS; i++) {
       fprintf(process->logfd, ", %lu", process->dram_lists[i].numentries);
     }
     fprintf(process->logfd, "]");
-    fprintf(process->logfd, "\tnvm_lists: [%lu", process->nvm_lists[COLD].numentries);
+
+    fprintf(process->logfd, "\tnvm_lists: [%lu",
+            process->nvm_lists[COLD].numentries);
     for (i = 1; i < NUM_HOTNESS_LEVELS; i++) {
       fprintf(process->logfd, ", %lu", process->nvm_lists[i].numentries);
     }
-    fprintf(process->logfd, "]\tmigrations_up: %lu\tmigrations_down: %lu\tmigration_waits: %lu\tDRAM_samples: %lu\tNVM_samples: %lu\tcools: %lu\n", process->migrations_up, process->migrations_down, process->migration_waits, process->accessed_pages[DRAMREAD], process->accessed_pages[NVMREAD], process->cools);
+    fprintf(process->logfd,
+            "]\tmigrations_up: %lu\tmigrations_down: %lu\tmigration_waits: %lu"
+            "\tDRAM_samples: %lu\tNVM_samples: %lu\tcools: %lu\n",
+            process->migrations_up, process->migrations_down,
+            process->migration_waits,
+            process->accessed_pages[DRAMREAD],
+            process->accessed_pages[NVMREAD],
+            process->cools);
     fflush(process->logfd);
-    LOG_STATS("\tprocess [%d]\tdram_lists: [%lu", process->pid, process->dram_lists[COLD].numentries);
+
+    LOG_STATS("\tprocess [%d]\tdram_lists: [%lu",
+              process->pid, process->dram_lists[COLD].numentries);
     for (i = 1; i < NUM_HOTNESS_LEVELS; i++) {
       LOG_STATS(", %lu", process->dram_lists[i].numentries);
     }
@@ -2346,24 +2358,54 @@ void count_pages()
     for (i = 1; i < NUM_HOTNESS_LEVELS; i++) {
       LOG_STATS(", %lu", process->nvm_lists[i].numentries);
     }
-    LOG_STATS("]\tcurrent_miss_ratio: %f\ttarget_miss_ratio: %f\tcurrent_dram: [%ld]\tcurrent_nvm: [%ld]\n", process->current_miss_ratio, process->target_miss_ratio, process->current_dram, process->current_nvm);
+    LOG_STATS("]\tcurrent_miss_ratio: %f\ttarget_miss_ratio: %f"
+              "\tcurrent_dram: [%ld]\tcurrent_nvm: [%ld]\n",
+              process->current_miss_ratio, process->target_miss_ratio,
+              process->current_dram, process->current_nvm);
 
-    LOG_STATS("\t\tDRAM accesses: [%"PRIu64"]\tNVM accesses: [%"PRIu64"]\twrong memtype: [%"PRIu64"]\tsamples: [", process->accessed_pages[DRAMREAD], process->accessed_pages[NVMREAD], process->wrong_memtype);
-    for (i = LAST_HEMEM_THREAD + 1; i < PEBS_NPROCS ; i++) {
+    LOG_STATS("\t\tDRAM accesses: [%"PRIu64"]\tNVM accesses: [%"PRIu64"]"
+              "\twrong memtype: [%"PRIu64"]\tsamples: [",
+              process->accessed_pages[DRAMREAD],
+              process->accessed_pages[NVMREAD],
+              process->wrong_memtype);
+    for (i = LAST_HEMEM_THREAD + 1; i < PEBS_NPROCS; i++) {
       LOG_STATS("%"PRIu64", ", process->samples[i]);
     }
-    LOG_STATS("]\tmigration_up: [%lu]\tmigrations_down: [%lu]\tcools: [%lu]\n", process->migrations_up, process->migrations_down, process->cools);
-    // To allow redirect by external scripts, we print to stdout
-    fprintf(stdout, "p%d: %.0f GB DRAM, %.0f GB NVM,\t", process->pid, 
-      ((double)process->current_dram) / (1024.0 * 1024.0 * 1024.0), 
-      ((double)process->current_nvm) / (1024.0 * 1024.0 * 1024.0));
-    dram_usage += ((double)process->current_dram) / (1024.0 * 1024.0 * 1024.0);
-    nvm_usage += ((double)process->current_nvm) / (1024.0 * 1024.0 * 1024.0);
-    //tmp = process;
-    process = process->next;
-    //pthread_mutex_unlock(&(tmp->process_lock));
+    LOG_STATS("]\tmigration_up: [%lu]\tmigrations_down: [%lu]\tcools: [%lu]\n",
+              process->migrations_up, process->migrations_down,
+              process->cools);
+
+    fprintf(stdout, "p%d: %.0f GB DRAM, %.0f GB NVM,\t",
+            process->pid,
+            ((double)process->current_dram) / (1024.0 * 1024.0 * 1024.0),
+            ((double)process->current_nvm)  / (1024.0 * 1024.0 * 1024.0));
+
+    *dram_usage += ((double)process->current_dram) / (1024.0 * 1024.0 * 1024.0);
+    *nvm_usage  += ((double)process->current_nvm)  / (1024.0 * 1024.0 * 1024.0);
   }
-  fprintf(stdout, "total: %.0f GB DRAM, %.0f GB NVM\n", dram_usage, nvm_usage);
+}
+
+
+
+void count_pages()
+{
+  struct timeval now;
+  gettimeofday(&now, NULL);
+  double dram_usage = 0, nvm_usage = 0;
+
+  //process = peek_process(&processes_list);
+#ifdef VULCAN
+  // vulcan here, print out from two lists instead of just one
+  // LC list
+  count_pages_for_list(lc_processes_list.first, &dram_usage, &nvm_usage);
+  // BE list
+  count_pages_for_list(be_processes_list.first, &dram_usage, &nvm_usage);
+#else
+  // Fairmem and tmts 
+  count_pages_for_list(processes_list.first, &dram_usage, &nvm_usage);
+#endif
+  fprintf(stdout, "total: %.0f GB DRAM, %.0f GB NVM\n",
+          dram_usage, nvm_usage);
   fflush(stdout);
 }
 

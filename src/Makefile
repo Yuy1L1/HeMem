@@ -3,10 +3,15 @@ CC = gcc
 #UCM_CFLAGS = -Wall -g3 -O0
 #SHARED_CFLAGS = -Wall -g3 -O0
 APP_CFLAGS = -Wall -O2 -g3 -fPIC
-APP_CFLAG += -D VULCAN
 UCM_CFLAGS = -Wall -O2 -g3
 SHARED_CFLAGS = -Wall -O2 -g3
 #CFLAGS = -g3 -Wall -O0 -fPIC
+
+APP_CFLAGS += -D VULCAN
+UCM_CFLAGS += -D VULCAN
+SHARED_CFLAGS += -D VULCAN
+
+
 UCM = ucm
 APP = app
 SHARED = shared
@@ -47,7 +52,7 @@ channel-app.o: ${APP}/channel-app.c ${APP}/channel-app.h
 	$(CC) $(APP_CFLAGS) $(APP_INCLUDES) -c ${APP}/channel-app.c
 
 central-manager: ucm.o channel-shared.o channel-ucm.o timer.o hemem-ucm.o pebs.o fifo.o spsc-ring.o logging.o
-	$(CC) -o central-manager ucm.o channel-shared.o channel-ucm.o timer.o pebs.o hemem-ucm.o fifo.o spsc-ring.o logging.o -lpthread
+	$(CC)  -o central-manager ucm.o channel-shared.o channel-ucm.o timer.o pebs.o hemem-ucm.o fifo.o spsc-ring.o logging.o -lpthread -lm
 
 tmts-manager: ${UCM}/ucm.c ${SHARED}/channel-shared.c ${UCM}/channel-ucm.c \
 			  ${UCM}/timer.c ${UCM}/hemem-ucm.c ${UCM}/pebs.c ${UCM}/fifo.c ${UCM}/spsc-ring.c ${SHARED}//logging.c
@@ -55,7 +60,7 @@ tmts-manager: ${UCM}/ucm.c ${SHARED}/channel-shared.c ${UCM}/channel-ucm.c \
 
 vulcan-manager: ${UCM}/ucm.c ${SHARED}/channel-shared.c ${UCM}/channel-ucm.c \
 			  ${UCM}/timer.c ${UCM}/hemem-ucm.c ${UCM}/pebs.c ${UCM}/fifo.c ${UCM}/spsc-ring.c ${SHARED}//logging.c
-	$(CC) -D VULCAN $(SHARED_CFLAGS) $(SHARED_INCLUDES) $(UCM_CFLAGS) $(UCM_INCLUDES) -o $@ $^ -lpthread -lm #-Wno-unused-variable
+	$(CC) $(SHARED_CFLAGS) $(SHARED_INCLUDES) $(UCM_CFLAGS) $(UCM_INCLUDES) -o $@ $^ -lpthread -lm  -Wno-unused-variable
 
 ucm.o: ${UCM}/ucm.c
 	$(CC) $(UCM_CFLAGS) $(UCM_INCLUDES) -c ${UCM}/ucm.c

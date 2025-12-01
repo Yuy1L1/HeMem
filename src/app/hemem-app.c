@@ -160,10 +160,10 @@ int add_process()
   request.header.pid = pid;
   request.target_miss_ratio = target_miss_ratio;
   request.req_dram = required_dram;
-  printf("sanity check: line 163 from app/hemem-app.c\n");
+  // printf("sanity check: line 163 from app/hemem-app.c\n");
 #ifdef VULCAN
   request.is_lc = is_lc;
-  printf("line 161. inside app/hemem-app.c\n");
+  // printf("line 161. inside app/hemem-app.c\n");
 #endif
   request.header.msg_size = sizeof(request);
 #ifdef LLAMA
@@ -187,7 +187,7 @@ int remove_process()
   request.header.operation = REMOVE_PROCESS;
   request.header.pid = pid;
 #ifdef VULCAN
-  printf("line 185. inside app/hemem-app.c\n");
+  // printf("line 185. inside app/hemem-app.c\n");
   request.is_lc = is_lc;
 #endif
   request.header.msg_size = sizeof(request);
@@ -426,10 +426,8 @@ void hemem_app_init()
   }
   fprintf(stderr, "DRAM Requested: %lu\n", required_dram);
 
-  printf("sanity check: line 429. inside app/hemem-app.c\n");
   
 #ifdef VULCAN
-  printf("line 425. inside app/hemem-app.c\n");
   char* is_lc_str = getenv("LC_WORKLOAD_OR_NOT");
   is_lc = true; // assign true to the global variable
   // if is lc is true, then need to put it in lc list, else be list 
@@ -450,9 +448,6 @@ void hemem_app_init()
   // sanity check
   // sanity check
   printf("current workload is LC? %d\n", is_lc);
-#warning "VULCAN is defined in hemem-app.c"
-#else
-#warning "VULCAN is not defined in hemem-app.c"
 #endif
 
   status = add_process();

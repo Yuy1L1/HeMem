@@ -20,7 +20,7 @@
 //#define DRAMSIZE  (128L * (1024L * 1024L * 1024L))
 
 #define NVMSIZE   (128L * (1024L * 1024L * 1024L))
-#define DRAMSIZE  (64L * (1024L * 1024L * 1024L))
+#define DRAMSIZE  (80L * (1024L * 1024L * 1024L))
 
 //#define NVMSIZE   (16L * (1024L * 1024L * 1024L))
 //#define DRAMSIZE  (16L * (1024L * 1024L * 1024L))
@@ -132,6 +132,9 @@ struct add_process_response {
 
 struct remove_process_request {
   struct msg_header header;
+#ifdef VULCAN
+  bool is_lc;
+#endif
 };
 
 struct remove_process_response {
