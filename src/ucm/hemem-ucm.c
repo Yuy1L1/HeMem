@@ -435,7 +435,9 @@ struct hemem_process* ucm_add_process(int fd, struct add_process_request* reques
 #endif
 
 #ifdef VULCAN
-   process->is_lc = request->is_lc; //TODO: check the app side
+   printf("sanity check: line 438, in ucm/hemem-ucm.c\n");
+   printf("sanity check: line 439, request->is_lc is %d\n", request->is_lc);
+   process->is_lc = request->is_lc;
    process->demand = 0.0;
    process->credits = 100; // everyone gets this default
 #endif

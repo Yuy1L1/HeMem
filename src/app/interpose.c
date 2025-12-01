@@ -232,6 +232,7 @@ static __attribute__((constructor)) void init(void)
 #endif
 
   hemem_app_init();
+  //printf("sanity check, called from constructor. inside app/interpose.c\n");
 }
 
 static __attribute__((destructor)) void hemem_shutdown(void)

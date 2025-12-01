@@ -1436,13 +1436,20 @@ void *pebs_policy_thread()
     struct hemem_process *procs[MAX_PROCS];
 
     int n = 0;
-    for (struct hemem_process *p = lc_processes_list.first; p; p = p->next)
-      procs[n++] = p;
+    int lc_count = 0;
+    int be_count = 0;
+    
+    for (struct hemem_process *p = lc_processes_list.first; p; p = p->next) {
+        procs[n++] = p;
+        lc_count++;
+    }
 
-    for (struct hemem_process *p = be_processes_list.first; p; p = p->next)
-      procs[n++] = p;
-
-    printf("sanity check: current total number of process is %d\n", n);
+    for (struct hemem_process *p = be_processes_list.first; p; p = p->next) {
+        procs[n++] = p;
+        be_count++;
+    }
+    
+    printf("sanity check: total procs=%d, lc=%d, be=%d\n", n, lc_count, be_count); 
     if (n == 0) goto vulcan_sleep;
     
     // DRAMSIZE is also in bytes. it is defined as macros, like
@@ -1498,7 +1505,7 @@ void *pebs_policy_thread()
           }
       }
       
-      printf("sanity check: current total number of process is %.2f\n", fthr);
+      printf("sanity check: current fast tier hit ratio is %.2f\n", fthr);
 
       // demand_i = alloc_i + (gpt - fthr) * RSS_i * log2(RSS_i)
       double alloc  = (double)pr->current_dram; //this is the de facto DRAM usage!!
@@ -1544,7 +1551,7 @@ void *pebs_policy_thread()
       pthread_mutex_unlock(&(pr->process_lock));
     }
 
-    printf("sanity check here, line 1437. lc borrowers: %d, be borrowers: %d, donors: %d", nlcb, nbeb, ndon);
+    printf("sanity check: line 1437. lc borrowers: %d, be borrowers: %d, donors: %d\n", nlcb, nbeb, ndon);
     // sort donors by asending credits
     // qsort() defined in stdlib. void qsort(void *base, size_t num, size_t size, int (*compar)(const void *, const void *));
     // i need to define a comparator function.
@@ -1628,7 +1635,6 @@ void *pebs_policy_thread()
       }
     }
 
-    // TODO:real migration starts here!!!
     // key idea: separate the control plane and data plane
     for (int i = 0; i < n; i++) {
       struct hemem_process *pr = procs[i];
@@ -1650,7 +1656,7 @@ void *pebs_policy_thread()
     }
 
     gettimeofday(&end, NULL);
-    printf("time spent in vulcan policy logic %.2f\n", elapsed(&start, &end));
+    printf("sanity check: time spent in vulcan policy logic %.2f\n", elapsed(&start, &end));
 
 vulcan_sleep:
     usleep(1000000);
@@ -2134,7 +2140,8 @@ void pebs_add_process(struct hemem_process *process)
   // equal to the amount of cold dram the processes of lower
   // priority are using
 #ifdef VULCAN
-  if (process->is_lc == true) {
+  printf("sanity check: line 2143. process->lc is %d\n", process->is_lc);
+  if (process->is_lc) {
     enqueue_process(&lc_processes_list, process);
   }
   else {
@@ -2156,7 +2163,7 @@ void pebs_add_process(struct hemem_process *process)
 void pebs_remove_process(struct hemem_process *process)
 {
 #ifdef VULCAN
-  if (process->is_lc == true) {
+  if (process->is_lc) {
     process_list_remove(&lc_processes_list, process);
   } else {
     process_list_remove(&be_processes_list, process);

@@ -47,6 +47,10 @@ double target_miss_ratio =  0.1;
 
 uint64_t required_dram = DRAMSIZE;
 
+#ifdef VULCAN
+bool is_lc = true;
+#endif
+
 static __thread struct msg_header *response;
 
 void* process_request(int fd, void* request)
@@ -156,8 +160,10 @@ int add_process()
   request.header.pid = pid;
   request.target_miss_ratio = target_miss_ratio;
   request.req_dram = required_dram;
+  printf("sanity check: line 163 from app/hemem-app.c\n");
 #ifdef VULCAN
   request.is_lc = is_lc;
+  printf("line 161. inside app/hemem-app.c\n");
 #endif
   request.header.msg_size = sizeof(request);
 #ifdef LLAMA
@@ -180,6 +186,10 @@ int remove_process()
 
   request.header.operation = REMOVE_PROCESS;
   request.header.pid = pid;
+#ifdef VULCAN
+  printf("line 185. inside app/hemem-app.c\n");
+  request.is_lc = is_lc;
+#endif
   request.header.msg_size = sizeof(request);
 
   // here it uses the remap_fd to let the central manager record the remap sock fd
@@ -416,23 +426,33 @@ void hemem_app_init()
   }
   fprintf(stderr, "DRAM Requested: %lu\n", required_dram);
 
+  printf("sanity check: line 429. inside app/hemem-app.c\n");
+  
 #ifdef VULCAN
-  bool is_lc = true; // defaulted to true
-  char* is_lc_string = getenv("LC_WORKLOAD_OR_NOT");
-  // if is lc is true, then need to put it in lc list
-  // else be list 
-  if (lc_env != NULL) {
+  printf("line 425. inside app/hemem-app.c\n");
+  char* is_lc_str = getenv("LC_WORKLOAD_OR_NOT");
+  is_lc = true; // assign true to the global variable
+  // if is lc is true, then need to put it in lc list, else be list 
+  if (is_lc_str != NULL) {
     // interpret "0" / "false" / "False" / "FALSE" as BE
-    if (strcmp(lc_env, "0") == 0 ||
-        strcasecmp(lc_env, "false") == 0) {
+    if (strcmp(is_lc_str, "0") == 0 ||
+        strcasecmp(is_lc_str, "false") == 0) {
         is_lc = false;
     } else {
         // anything else means LC (1 / true / TRUE / etc)
         is_lc = true;
     }
   }
+  else{
+   fprintf(stderr, "LC_WORKLOAD_OR_NOT not set; please export 0/1\n");
+   exit(1);
+  }
   // sanity check
-  fprintf("current workload is LC? %d\n", is_lc);
+  // sanity check
+  printf("current workload is LC? %d\n", is_lc);
+#warning "VULCAN is defined in hemem-app.c"
+#else
+#warning "VULCAN is not defined in hemem-app.c"
 #endif
 
   status = add_process();

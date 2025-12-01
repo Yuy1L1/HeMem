@@ -3,6 +3,7 @@ CC = gcc
 #UCM_CFLAGS = -Wall -g3 -O0
 #SHARED_CFLAGS = -Wall -g3 -O0
 APP_CFLAGS = -Wall -O2 -g3 -fPIC
+APP_CFLAG += -D VULCAN
 UCM_CFLAGS = -Wall -O2 -g3
 SHARED_CFLAGS = -Wall -O2 -g3
 #CFLAGS = -g3 -Wall -O0 -fPIC
