@@ -1432,8 +1432,8 @@ void *pebs_policy_thread()
 #elif defined(VULCAN)
     struct timeval start, end;
     gettimeofday(&start, NULL);
-    // printf("sanity check: line 1435 inside vulcan policy\n");
     const double EMA = 0.8;
+    const double PAGE = (double) PAGE_SIZE;
     struct hemem_process *procs[MAX_PROCS];
 
     int n = 0;
@@ -1453,9 +1453,8 @@ void *pebs_policy_thread()
     printf("sanity check: line 1453. total procs=%d, lc=%d, be=%d\n", n, lc_count, be_count); 
     if (n == 0) goto vulcan_sleep;
     
-    // DRAMSIZE is also in bytes. it is defined as macros, like
-    // #define DRAMSIZE  (64L * (1024L * 1024L * 1024L))
-    double GFMC = (double) DRAMSIZE /(double)n;
+    // DRAMSIZE is also in bytes. it is defined as macros inside shared/hemem-shared.h
+    double GFMC_bytes = (double) DRAMSIZE /(double)n;
 
     // all processes put into one list, just doing math here
     for (int i = 0; i < n; i++) {
@@ -1466,11 +1465,16 @@ void *pebs_policy_thread()
       // current_dram is the memory allocated in the dram(fast tier)
       // current_nvm is the memory allocated in the nvm(slow tier)
       // mem_allocated is the RSS, ideally, mem_allocated = current_dram + current_nvm 
-      double rss = (double)pr->mem_allocated;
+      double rss_bytes = (double)pr->mem_allocated;
+
+      double rss_pages   = rss_bytes   / PAGE;
+      double gfmc_pages  = GFMC_bytes  / PAGE; 
 
       // GPT = min(1, GFMC / RSS)
       double gpt = 1.0;
-      if (GFMC < rss) gpt = GFMC / rss;
+      if (gfmc_pages < rss_pages) {
+          gpt = gfmc_pages / rss_pages;
+      }
 
       double fthr = 0.0;
        // FTHR_i = EMA * hit + (1-EMA) * hit in last round
@@ -1496,7 +1500,7 @@ void *pebs_policy_thread()
           pr->accessed_pages[DRAMREAD] = 0; pr->accessed_pages[NVMREAD]  = 0;
       } else {
           // No new accesses this round
-          if (pr->current_miss_ratio == -1) {
+          if (pr->current_miss_ratio < 0.0) {
               // No history, no new data: totally blind.
               // Choose a neutral default; 1.0 means “assume all hits”.
               fthr = 1.0;
@@ -1508,21 +1512,54 @@ void *pebs_policy_thread()
       
       printf("sanity check: line 1509. current fast tier hit ratio is %.2f\n", fthr);
 
+      double alloc_bytes  = (double)pr->current_dram; //this is the de facto DRAM usage!!
+      double alloc_pages = alloc_bytes / PAGE;
+
+      double rss_for_log = rss_pages;
+      if (rss_for_log < 1.0)
+          rss_for_log = 1.0;        // avoid log2(0)
+
       // demand_i = alloc_i + (gpt - fthr) * RSS_i * log2(RSS_i)
-      double alloc  = (double)pr->current_dram; //this is the de facto DRAM usage!!
-      double demand = alloc + (gpt - fthr) * rss * log2(rss);
+      double demand_pages = alloc_pages + (gpt - fthr) * rss_pages * log2(rss_for_log);
+      printf(
+    "VULCAN DEMAND DEBUG:pid=%d\n"
+    "    rss_pages      = %.2f\n"
+    "    alloc_pages    = %.2f\n"
+    "    gfmc_pages     = %.2f\n"
+    "    gpt            = %.4f\n"
+    "    fthr           = %.4f\n"
+    "    (gpt - fthr)   = %.4f\n"
+    "    rss_for_log    = %.2f\n"
+    "    log2(rss_for_log) = %.4f\n"
+    "    demand_pages(before clamp) = %.2f\n",
+    pr->pid,
+    rss_pages,
+    alloc_pages,
+    gfmc_pages,
+    gpt,
+    fthr,
+    (gpt - fthr),
+    rss_for_log,
+    log2(rss_for_log),
+    demand_pages
+);
+
 
       // sanity clamp the demand(self added)
-      if (demand < 0.0) demand = 0;
-      if (demand > rss) demand = rss;
+      if (demand_pages < 0.0) demand_pages = 0;
+      if (demand_pages > rss_pages) demand_pages = rss_pages;
 
       // writing back
-      pr->demand = (uint64_t)demand;
+      pr->demand = (uint64_t) (demand_pages * PAGE);
       // Algo 1 starts here
       // 0. adjust alloc (line 1-2)
-      // projected dram usage = min(demand_i, GFMC)
-      if (demand > GFMC) pr->projected_dram = GFMC;
-      else pr->projected_dram = demand;
+      // projected dram usage = min(demand_i, GFMC), still in BYTES
+      double projected_pages = demand_pages;
+      if (projected_pages > gfmc_pages)
+          projected_pages = gfmc_pages;
+      
+      // writing back
+      pr->projected_dram = (uint64_t)(projected_pages * PAGE);
 
       pthread_mutex_unlock(&(pr->process_lock));
     }
@@ -1536,6 +1573,17 @@ void *pebs_policy_thread()
     for (int i = 0; i < n; i++) {
       struct hemem_process* pr = procs[i];
       pthread_mutex_lock(&(pr->process_lock));
+
+      printf("VULCAN DEBUG: pid=%d is_lc=%d alloc_dram=%lu alloc_nvm=%lu "
+           "alloc_dram_in_pages=%.0f projected_dram_in_pages= %.0f demand_in_pages=%.0f\n",
+           pr->pid,
+           pr->is_lc,
+           pr->current_dram,
+           pr->current_nvm,
+           (double)pr->current_dram / PAGE_SIZE,
+           (double)pr->projected_dram / PAGE_SIZE,
+           (double)pr->demand / PAGE_SIZE
+          );
 
       if (pr->projected_dram < pr->demand) { 
         if (pr->is_lc){
@@ -1558,6 +1606,10 @@ void *pebs_policy_thread()
     // i need to define a comparator function.
     qsort(donors, ndon, sizeof(donors[0]), cmp_min_credits);
 
+    if (nlcb + nbeb == 0) {
+      // no one actually wants more DRAM; don't touch allocations
+      goto apply_deltas;
+    }
 
     // Algo 1: line 6 - 17
     // this while loop is lock free. there could be issues :(
@@ -1615,7 +1667,7 @@ void *pebs_policy_thread()
           struct hemem_process *p = procs[j];
           if (p->is_lc) continue;
             
-          if (p->projected_dram > GFMC + UNIT) {
+	  if (p->projected_dram > GFMC_bytes + UNIT) {
             // steal from this BE process
             p->projected_dram   -= UNIT;
             borrower->projected_dram += UNIT;
@@ -1637,18 +1689,21 @@ void *pebs_policy_thread()
     }
 
     // key idea: separate the control plane and data plane
+apply_deltas:
     for (int i = 0; i < n; i++) {
       struct hemem_process *pr = procs[i];
       pthread_mutex_lock(&pr->process_lock);
 
       int64_t delta = (int64_t)pr->projected_dram - (int64_t)pr->current_dram;
 
+      printf("sanity check, line 1656. delta is %lu, projected dram is %lu, current dram is %lu", delta, pr->projected_dram, pr->current_dram);
       if (delta < 0) {
         // has too much DRAM, must migrate down -delta bytes
         uint64_t migrate_down_bytes = (uint64_t)(-delta);
         vulcan_migrate_down(pr, migrate_down_bytes);
       }
       else if (delta > 0) {
+	printf("was i ever here??");
         uint64_t migrate_up_bytes = (uint64_t)delta;
         vulcan_migrate_up(pr, migrate_up_bytes);
 
