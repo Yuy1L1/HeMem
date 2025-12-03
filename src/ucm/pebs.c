@@ -1227,6 +1227,7 @@ static int cmp_min_credits(const void *a, const void *b) {
     return 0;
 }
 
+/*
 static void vulcan_migrate_down(struct hemem_process *process, uint64_t budget_bytes){
     uint64_t migrated_bytes = 0;
 
@@ -1334,9 +1335,7 @@ static void vulcan_migrate_up(struct hemem_process *process, uint64_t budget_byt
     migrated_bytes += pt_to_pagesize(p->pt);
   }
 }
-//#warning "from ucm/pebs.c, vulcan defined"
-//#else
-//#warning "from ucm/pebs.c, vulcan UNDEFINED!!!"
+*/
 #endif
 
 void *pebs_policy_thread()
@@ -1485,8 +1484,15 @@ void *pebs_policy_thread()
           if (miss_now > 1.0) miss_now = 1.0;
 
           double hit_now = 1.0 - miss_now;
+	  
+	  printf("sanity check. line 1488. calc_miss_ratio: pid=%d DRAMREAD=%lu NVMREAD=%lu miss_now=%f, hit_now=%f\n",
+  		pr->pid,
+  		pr->accessed_pages[DRAMREAD],
+  		pr->accessed_pages[NVMREAD],
+  		miss_now,
+  		hit_now);
 
-          if (pr->current_miss_ratio < 0.0) {
+          if (pr->current_miss_ratio == -1) {
               // First time: no valid "last" value, so don't do EMA with junk
               // Use the raw sample for both miss_ratio and fthr.
               pr->current_miss_ratio = miss_now;
@@ -1500,17 +1506,15 @@ void *pebs_policy_thread()
           pr->accessed_pages[DRAMREAD] = 0; pr->accessed_pages[NVMREAD]  = 0;
       } else {
           // No new accesses this round
-          if (pr->current_miss_ratio < 0.0) {
-              // No history, no new data: totally blind.
-              // Choose a neutral default; 1.0 means “assume all hits”.
-              fthr = 1.0;
+          if (pr->current_miss_ratio ==-1) {
+              // No history
+	      fthr = 0.0;
           } else {
               // Reuse last hit ratio (no update)
               fthr = 1.0 - pr->current_miss_ratio;
           }
       }
       
-      printf("sanity check: line 1509. current fast tier hit ratio is %.2f\n", fthr);
 
       double alloc_bytes  = (double)pr->current_dram; //this is the de facto DRAM usage!!
       double alloc_pages = alloc_bytes / PAGE;
@@ -1521,17 +1525,17 @@ void *pebs_policy_thread()
 
       // demand_i = alloc_i + (gpt - fthr) * RSS_i * log2(RSS_i)
       double demand_pages = alloc_pages + (gpt - fthr) * rss_pages * log2(rss_for_log);
-      printf(
-    "VULCAN DEMAND DEBUG:pid=%d\n"
-    "    rss_pages      = %.2f\n"
-    "    alloc_pages    = %.2f\n"
-    "    gfmc_pages     = %.2f\n"
-    "    gpt            = %.4f\n"
-    "    fthr           = %.4f\n"
-    "    (gpt - fthr)   = %.4f\n"
-    "    rss_for_log    = %.2f\n"
-    "    log2(rss_for_log) = %.4f\n"
-    "    demand_pages(before clamp) = %.2f\n",
+      /*printf(
+    	"VULCAN DEMAND DEBUG:pid=%d\n"
+    	"    rss_pages      = %.2f\n"
+    	"    alloc_pages    = %.2f\n"
+    	"    gfmc_pages     = %.2f\n"
+    	"    gpt            = %.4f\n"
+    	"    fthr           = %.4f\n"
+    	"    (gpt - fthr)   = %.4f\n"
+    	"    rss_for_log    = %.2f\n"
+   	"    log2(rss_for_log) = %.4f\n"
+    	"    demand_pages(before clamp) = %.2f\n",
     pr->pid,
     rss_pages,
     alloc_pages,
@@ -1543,7 +1547,7 @@ void *pebs_policy_thread()
     log2(rss_for_log),
     demand_pages
 );
-
+*/
 
       // sanity clamp the demand(self added)
       if (demand_pages < 0.0) demand_pages = 0;
@@ -1559,7 +1563,7 @@ void *pebs_policy_thread()
           projected_pages = gfmc_pages;
       
       // writing back
-      pr->projected_dram = (uint64_t)(projected_pages * PAGE);
+      pr->projected_dram = (uint64_t)(projected_pages * PAGE); //in bytes
 
       pthread_mutex_unlock(&(pr->process_lock));
     }
@@ -1573,7 +1577,7 @@ void *pebs_policy_thread()
     for (int i = 0; i < n; i++) {
       struct hemem_process* pr = procs[i];
       pthread_mutex_lock(&(pr->process_lock));
-
+/*
       printf("VULCAN DEBUG: pid=%d is_lc=%d alloc_dram=%lu alloc_nvm=%lu "
            "alloc_dram_in_pages=%.0f projected_dram_in_pages= %.0f demand_in_pages=%.0f\n",
            pr->pid,
@@ -1584,7 +1588,7 @@ void *pebs_policy_thread()
            (double)pr->projected_dram / PAGE_SIZE,
            (double)pr->demand / PAGE_SIZE
           );
-
+*/
       if (pr->projected_dram < pr->demand) { 
         if (pr->is_lc){
           // lc borrowers list
@@ -1700,12 +1704,12 @@ apply_deltas:
       if (delta < 0) {
         // has too much DRAM, must migrate down -delta bytes
         uint64_t migrate_down_bytes = (uint64_t)(-delta);
-        vulcan_migrate_down(pr, migrate_down_bytes);
+        process_migrate_down(pr, migrate_down_bytes);
       }
       else if (delta > 0) {
-	printf("was i ever here??");
+	printf("sanity check. line 1708. was i ever here??");
         uint64_t migrate_up_bytes = (uint64_t)delta;
-        vulcan_migrate_up(pr, migrate_up_bytes);
+        process_migrate_up(pr, migrate_up_bytes);
 
       }
       pthread_mutex_unlock(&pr->process_lock);
