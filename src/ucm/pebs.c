@@ -1449,7 +1449,7 @@ void *pebs_policy_thread()
         be_count++;
     }
     
-    printf("sanity check: line 1453. total procs=%d, lc=%d, be=%d\n", n, lc_count, be_count); 
+    // printf("sanity check: line 1453. total procs=%d, lc=%d, be=%d\n", n, lc_count, be_count); 
     if (n == 0) goto vulcan_sleep;
     
     // DRAMSIZE is also in bytes. it is defined as macros inside shared/hemem-shared.h
@@ -1484,13 +1484,14 @@ void *pebs_policy_thread()
           if (miss_now > 1.0) miss_now = 1.0;
 
           double hit_now = 1.0 - miss_now;
-	  
-	  printf("sanity check. line 1488. calc_miss_ratio: pid=%d DRAMREAD=%lu NVMREAD=%lu miss_now=%f, hit_now=%f\n",
+	 
+	  printf("line 1488. calc_miss_ratio: pid=%d DRAMREAD=%lu NVMREAD=%lu miss_now=%f, hit_now=%f\n",
   		pr->pid,
   		pr->accessed_pages[DRAMREAD],
   		pr->accessed_pages[NVMREAD],
   		miss_now,
   		hit_now);
+	
 
           if (pr->current_miss_ratio == -1) {
               // First time: no valid "last" value, so don't do EMA with junk
@@ -1550,7 +1551,7 @@ void *pebs_policy_thread()
 */
 
       // sanity clamp the demand(self added)
-      if (demand_pages < 0.0) demand_pages = 0;
+      if (demand_pages < alloc_pages) demand_pages = alloc_pages;
       if (demand_pages > rss_pages) demand_pages = rss_pages;
 
       // writing back
@@ -1700,14 +1701,19 @@ apply_deltas:
 
       int64_t delta = (int64_t)pr->projected_dram - (int64_t)pr->current_dram;
 
-      printf("sanity check, line 1656. delta is %lu, projected dram is %lu, current dram is %lu", delta, pr->projected_dram, pr->current_dram);
+      printf("line 1704. pid=%d  delta is %.0f "
+	     "alloc_dram_in_pages=%.0f, alloc_nvm_in_pages=%.0f projected_dram_in_pages= %.0f\n",
+	      pr->pid,
+	   (double) delta / PAGE_SIZE,
+	   (double)pr->current_dram / PAGE_SIZE,
+	   (double)pr->current_nvm / PAGE_SIZE,
+           (double)pr->projected_dram / PAGE_SIZE);
       if (delta < 0) {
         // has too much DRAM, must migrate down -delta bytes
         uint64_t migrate_down_bytes = (uint64_t)(-delta);
         process_migrate_down(pr, migrate_down_bytes);
       }
       else if (delta > 0) {
-	printf("sanity check. line 1708. was i ever here??");
         uint64_t migrate_up_bytes = (uint64_t)delta;
         process_migrate_up(pr, migrate_up_bytes);
 
@@ -2293,8 +2299,8 @@ void pebs_init(void)
 
   for (int i = LAST_HEMEM_THREAD + 1; i < PEBS_NPROCS; i++) {
     perf_page[i][DRAMREAD] = perf_setup(0x1d3, 0, i, DRAMREAD);      // MEM_LOAD_L3_MISS_RETIRED.LOCAL_DRAM
-    perf_page[i][NVMREAD] = perf_setup(0x2d3, 0, i, NVMREAD);      // MEM_LOAD_L3_MISS_RETIRED.REMOTE_DRAM
-    //perf_page[i][NVMREAD] = perf_setup(0x80d1, 0, i, NVMREAD);     // MEM_LOAD_RETIRED.LOCAL_PMM
+    //perf_page[i][NVMREAD] = perf_setup(0x2d3, 0, i, NVMREAD);      // MEM_LOAD_L3_MISS_RETIRED.REMOTE_DRAM
+    perf_page[i][NVMREAD] = perf_setup(0x80d1, 0, i, NVMREAD);     // MEM_LOAD_RETIRED.LOCAL_PMM
     //perf_page[i][WRITE] = perf_setup(0x82d0, 0, i, WRITE);    // MEM_INST_RETIRED.ALL_STORES
   }
 
