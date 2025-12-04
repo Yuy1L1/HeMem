@@ -19,8 +19,8 @@
 //#define NVMSIZE   (512L * (1024L * 1024L * 1024L))
 //#define DRAMSIZE  (128L * (1024L * 1024L * 1024L))
 
-#define NVMSIZE   (128L * (1024L * 1024L * 1024L))
-#define DRAMSIZE  (64L * (1024L * 1024L * 1024L))
+#define NVMSIZE   (480L * (1024L * 1024L * 1024L))
+#define DRAMSIZE  (32L * (1024L * 1024L * 1024L))
 
 //#define NVMSIZE   (16L * (1024L * 1024L * 1024L))
 //#define DRAMSIZE  (16L * (1024L * 1024L * 1024L))

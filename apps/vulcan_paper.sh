@@ -1,113 +1,146 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Experiment configuration
+#############################################
+# Basic env / paths (mirrors run_static.sh)
+#############################################
 
-CPU_LC="8-12"        # FlexKVS (LC)
-CPU_BE1="13-17"      # GAPBS PageRank (1st BE)
-CPU_BE2="18-22"      # NAS BT (2nd BE)
+HEMEM="/home/yuyi/HeMem"
+OUTDIR="${HEMEM}/vulcan-paper"
 
-MEM_NODE=0           # Preferred NUMA memory node
-START_CPU=8
-MISS_RATIO=0.8
-LIBHEMEM="/home/yuyi/HeMem/src/libhemem.so"
+export LD_LIBRARY_PATH="${HEMEM}/src:${LD_LIBRARY_PATH:-}"
+echo 1000000 | sudo tee /proc/sys/vm/max_map_count >/dev/null
 
-OUTDIR="./vulcan_runs"
-mkdir -p "$OUTDIR"
+mkdir -p "${OUTDIR}/logs"
+mkdir -p "${OUTDIR}/perf"
 
 TAG="$(date +%Y%m%d-%H%M%S)"
 
-# Paths to workloads
+#############################################
+# Experiment configuration
+#############################################
 
-FLEXKVS_BIN="flexkvs/kvsbench"
-GAPBS_PR_BIN="apps/gapbs/pr"
-#TODO: nas bt benchmark not sure how to write???
-NAS_BT_BIN="/home/yuyi/HeMem/apps/nas-bt-c-benchmark/bt"
+# CPU layout (physical core IDs)
+CPU_LC="8-12"      # FlexKVS (LC)
+CPU_BE1="13-17"    # GAPBS PageRank (BE1)
+CPU_BE2="18-23"    # NAS BT (BE2)
 
-# Arguments (adjust as needed)
-FLEXKVS_ARGS="--json"    # or whatever FlexKVS accepts
-GAPBS_ARGS="-g 29"       # huge graph (2^29 edges). Adjust if needed.
-NAS_BT_ARGS="class=D"    # choose C/D/E depending on memory size
+MEM_NODE=0         # NUMA node for CPU + memory
+START_CPU=8
+MISS_RATIO=0.8
 
+LIBHEMEM="${HEMEM}/src/libhemem.so"
+
+#############################################
+# Workload binaries
+#############################################
+
+FLEXKVS_BIN="${HEMEM}/apps/flexkvs/kvsbench"
+GAPBS_PR_BIN="${HEMEM}/apps/gapbs/pr"
+NAS_BT_BIN="${HEMEM}/apps/nas-bt-c-benchmark/NPB-OMP/bin/bt.E"
+
+#############################################
+# Workload arguments
+#############################################
+
+# ~45 GiB FlexKVS size, 250s total runtime
+FLEXKVS_ARGS="-t 4 -T 250 -w 30 -h 0.15 127.0.0.1:11211 -S $((45*1024*1024*1024))"
+
+# GAPBS PageRank: graph size 2^27, 50 iterations
+GAPBS_ARGS="-n 50 -g 27"
+
+#NAS_BT by default is 166GiB
+
+#############################################
 # Logging setup
+#############################################
 
-LC_LOG="${OUTDIR}/flexkvs-lc-${TAG}.log"
-BE1_LOG="${OUTDIR}/gapbs-pr-be1-${TAG}.log"
-BE2_LOG="${OUTDIR}/nas-bt-be2-${TAG}.log"
+LC_LOG="${OUTDIR}/logs/flexkvs-lc-${TAG}.log"
+BE1_LOG="${OUTDIR}/logs/gapbs-pr-be1-${TAG}.log"
+BE2_LOG="${OUTDIR}/logs/nas-bt-be2-${TAG}.log"
 
-echo "[INFO] Starting experiment tag=$TAG"
-echo "[INFO] Output directory: $OUTDIR"
+echo "[INFO] Starting Vulcan experiment tag=${TAG}"
+echo "[INFO] Output dir: ${OUTDIR}"
 echo
 
-# 1. Start FlexKVS (LC)
+#############################################
+# 1. Start FlexKVS (LC) at t = 0
+#############################################
 
 echo "[T=0s] Launching FlexKVS (LC)..."
 
-nice -20 numactl -C "${CPU_LC}" -m "${MEM_NODE}" -- \
-    env START_CPU="${START_CPU}" \
-        MISS_RATIO="${MISS_RATIO}" \
-        LC_WORKLOAD_OR_NOT=1 \
-        LD_PRELOAD="${LIBHEMEM}" \
-    "${FLEXKVS_BIN}" ${FLEXKVS_ARGS} \
-    > "${LC_LOG}" 2>&1 &
+nice -20 numactl -N "${MEM_NODE}" -m "${MEM_NODE}" --physcpubind="${CPU_LC}" -- \
+  env START_CPU="${START_CPU}" \
+      MISS_RATIO="${MISS_RATIO}" \
+      LC_WORKLOAD_OR_NOT=1 \
+      LD_PRELOAD="${LIBHEMEM}" \
+  "${FLEXKVS_BIN}" ${FLEXKVS_ARGS} \
+  > "${LC_LOG}" 2>&1 &
 
 PID_LC=$!
-echo "[INFO] FlexKVS started as LC (PID ${PID_LC}), log=${LC_LOG}"
+echo "[INFO] FlexKVS started as LC (PID=${PID_LC}), log=${LC_LOG}"
 echo
 
-# Delay before BE1
+#############################################
+# 2. Start GAPBS PageRank (BE1) at 50s
+#############################################
 
 echo "[INFO] Sleeping 50 seconds before launching PageRank..."
 sleep 50
 
-# 2. Start GAPBS PageRank (BE1)
-
 echo "[T=50s] Launching GAPBS PageRank (BE1)..."
 
-nice -20 numactl -C "${CPU_BE1}" -m "${MEM_NODE}" -- \
-    env START_CPU="${START_CPU}" \
-        MISS_RATIO="${MISS_RATIO}" \
-        LC_WORKLOAD_OR_NOT=0 \
-        LD_PRELOAD="${LIBHEMEM}" \
-    "${GAPBS_PR_BIN}" ${GAPBS_ARGS} \
-    > "${BE1_LOG}" 2>&1 &
+nice -20 numactl -N "${MEM_NODE}" -m "${MEM_NODE}" --physcpubind="${CPU_BE1}" -- \
+  env START_CPU="${START_CPU}" \
+      MISS_RATIO="${MISS_RATIO}" \
+      LC_WORKLOAD_OR_NOT=0 \
+      OMP_THREAD_LIMIT=8 \
+      LD_PRELOAD="${LIBHEMEM}" \
+  "${GAPBS_PR_BIN}" ${GAPBS_ARGS} \
+  > "${BE1_LOG}" 2>&1 &
 
 PID_BE1=$!
-echo "[INFO] PageRank started as BE1 (PID ${PID_BE1}), log=${BE1_LOG}"
+echo "[INFO] PageRank started as BE1 (PID=${PID_BE1}), log=${BE1_LOG}"
 echo
 
-# Delay before BE2
+#############################################
+# 3. Start NAS BT (BE2) at 110s
+#############################################
 
-echo "[INFO] Sleeping 110 seconds before launching NAS BT..."
-sleep 110
+echo "[INFO] Sleeping 60 seconds before launching NAS BT..."
+sleep 60
 
-# 3. Start NAS BT (BE2)
+echo "[T=110s] Launching NAS BT (BE2)..."
 
-echo "[T=160s] Launching NAS BT (BE2)..."
-
-nice -20 numactl -C "${CPU_BE2}" -m "${MEM_NODE}" -- \
-    env START_CPU="${START_CPU}" \
-        MISS_RATIO="${MISS_RATIO}" \
-        LC_WORKLOAD_OR_NOT=0 \
-        LD_PRELOAD="${LIBHEMEM}" \
-    "${NAS_BT_BIN}" ${NAS_BT_ARGS} \
-    > "${BE2_LOG}" 2>&1 &
+nice -20 numactl -N "${MEM_NODE}" -m "${MEM_NODE}" --physcpubind="${CPU_BE2}" -- \
+  env START_CPU="${START_CPU}" \
+      MISS_RATIO="${MISS_RATIO}" \
+      LC_WORKLOAD_OR_NOT=0 \
+      OMP_THREAD_LIMIT=5 \
+      LD_PRELOAD="${LIBHEMEM}" \
+  "${NAS_BT_BIN}" \
+  > "${BE2_LOG}" 2>&1 &
 
 PID_BE2=$!
-echo "[INFO] NAS BT started as BE2 (PID ${PID_BE2}), log=${BE2_LOG}"
+echo "[INFO] NAS BT started as BE2 (PID=${PID_BE2}), log=${BE2_LOG}"
 echo
 
-# Wait for all to finish
+#############################################
+# Run for 250 seconds total, then kill all
+#############################################
 
-echo "[INFO] Waiting for all workloads to finish..."
-wait "${PID_LC}"
-wait "${PID_BE1}"
-wait "${PID_BE2}"
+echo "[INFO] Running all workloads..."
+sleep 140
+
+echo "[INFO] 250 seconds elapsed. Killing all workloads..."
+kill -9 "${PID_LC}" 2>/dev/null || true
+kill -9 "${PID_BE1}" 2>/dev/null || true
+kill -9 "${PID_BE2}" 2>/dev/null || true
 
 echo
-echo "[INFO] All workloads completed."
+echo "[INFO] Experiment completed at T=250s."
 echo "  LC (FlexKVS): ${LC_LOG}"
-echo "  BE1 (PageRank): ${BE1_LOG}"
+echo "  BE1 (GAPBS BC): ${BE1_LOG}"
 echo "  BE2 (NAS-BT): ${BE2_LOG}"
 echo "[INFO] Experiment tag: ${TAG}"
 
